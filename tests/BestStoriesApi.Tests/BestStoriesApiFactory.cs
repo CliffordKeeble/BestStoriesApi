@@ -9,9 +9,10 @@ namespace BestStoriesApi.Tests;
 
 /// <summary>
 /// Starts the real app in memory, with the Hacker News client swapped for a Moq fake.
-/// The refresh service, store, controller and JSON output are all the real ones.
+/// The refresh service, store, endpoint and JSON output are all the real ones.
 /// </summary>
-public class BestStoriesApiFactory(Mock<IHackerNewsClient> fakeHackerNews, TimeSpan? refreshInterval = null)
+public class BestStoriesApiFactory(
+    Mock<IHackerNewsClient> fakeHackerNews, TimeSpan? refreshInterval = null, Action<HackerNewsOptions>? configure = null)
     : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -23,6 +24,7 @@ public class BestStoriesApiFactory(Mock<IHackerNewsClient> fakeHackerNews, TimeS
 
             // A long default, so a test sees exactly one refresh unless it asks for more.
             services.Configure<HackerNewsOptions>(o => o.RefreshInterval = refreshInterval ?? TimeSpan.FromHours(1));
+            if (configure is not null) services.Configure(configure);
         });
     }
 }

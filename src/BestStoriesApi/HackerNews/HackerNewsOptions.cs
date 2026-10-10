@@ -19,4 +19,10 @@ public class HackerNewsOptions
     /// allowed). An incomplete refresh never replaces a good snapshot.
     /// </summary>
     public double MaxFailedFetchFraction { get; set; } = 0.1;
+
+    /// <summary>
+    /// The longest a request waits for the first snapshot after start-up before it gets 503. Without a limit, a
+    /// slow first refresh would hold every early caller until the caller gave up.
+    /// </summary>
+    public TimeSpan FirstSnapshotWait { get; set; } = TimeSpan.FromSeconds(30);
 }

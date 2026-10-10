@@ -1,6 +1,9 @@
 using System.Buffers;
 using System.Globalization;
+using System.Numerics;
+using BestStoriesApi.HackerNews;
 using BestStoriesApi.Stories;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 
 namespace BestStoriesApi.Api;
@@ -11,7 +14,7 @@ public static class BestStoriesEndpoint
     public const string Route = "/api/beststories";
 
     public static IEndpointConventionBuilder MapBestStories(this IEndpointRouteBuilder app) =>
-        app.MapGet(Route, HandleAsync)
+        app.MapMethods(Route, [HttpMethods.Get, HttpMethods.Head], HandleAsync)
             .WithName("GetBestStories")
             .WithSummary("The n highest-scoring of Hacker News's best stories, highest first.")
             .Produces<IEnumerable<Story>>(StatusCodes.Status200OK)
@@ -33,10 +36,23 @@ public static class BestStoriesEndpoint
         return snapshot is not null ? WriteAsync(context, snapshot, n) : WaitForFirstSnapshotAsync(context, store, n);
     }
 
-    /// <summary>Only before the first refresh has finished: wait for that one refresh, never start another.</summary>
+    /// <summary>
+    /// Only before the first refresh has finished: wait for that one refresh, never start another, and not for
+    /// longer than FirstSnapshotWait.
+    /// </summary>
     private static async Task WaitForFirstSnapshotAsync(HttpContext context, StoryStore store, int n)
     {
-        var snapshot = await store.GetAsync(context.RequestAborted);
+        var limit = context.RequestServices.GetRequiredService<IOptions<HackerNewsOptions>>().Value.FirstSnapshotWait;
+        StorySnapshot? snapshot;
+        try
+        {
+            snapshot = await store.GetAsync(context.RequestAborted).WaitAsync(limit, context.RequestAborted);
+        }
+        catch (TimeoutException)
+        {
+            snapshot = null;
+        }
+
         if (snapshot is null)
         {
             context.Response.Headers.RetryAfter = "5";
@@ -64,6 +80,9 @@ public static class BestStoriesEndpoint
 
         response.ContentType = "application/json; charset=utf-8";
         response.ContentLength = snapshot.Length(n);
+        if (HttpMethods.IsHead(context.Request.Method))
+            return; // HEAD: the same headers as GET, and no body
+
         var body = response.BodyWriter;
         body.Write(snapshot.Head(n).Span);
         body.Write(StorySnapshot.Tail.Span);
@@ -82,12 +101,22 @@ public static class BestStoriesEndpoint
         return false;
     }
 
-    /// <summary>n must be a whole number of at least 1. More than there are returns them all.</summary>
+    /// <summary>
+    /// n must be a whole number of at least 1. More than there are returns them all, and that includes a number
+    /// too big for an int, which is read as "all of them".
+    /// </summary>
     private static bool TryReadN(StringValues values, out int n)
     {
         n = 0;
-        return values.Count > 0
-            && int.TryParse(values[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out n)
-            && n >= 1;
+        if (values.Count == 0)
+            return false;
+        if (int.TryParse(values[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out n))
+            return n >= 1;
+        if (BigInteger.TryParse(values[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var big) && big > int.MaxValue)
+        {
+            n = int.MaxValue;
+            return true;
+        }
+        return false;
     }
 }
