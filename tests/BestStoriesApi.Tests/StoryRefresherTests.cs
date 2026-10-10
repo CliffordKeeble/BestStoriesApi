@@ -117,3 +117,103 @@ public class StoryRefresherTests
         }
     }
 }
+
+/// <summary>A refresh in which many stories fail must not pass itself off as complete.</summary>
+public class IncompleteRefreshTests
+{
+    private static StoryRefresher CreateRefresher(Mock<IHackerNewsClient> client) =>
+        new(client.Object,
+            Options.Create(new HackerNewsOptions { MaxParallelFetches = 10 }),
+            NullLogger<StoryRefresher>.Instance);
+
+    /// <summary>200 stories with ids 1..200 and score = id; the ids listed fail to load.</summary>
+    private static Mock<IHackerNewsClient> TwoHundredWhereTheseFail(IEnumerable<int> failing)
+    {
+        var client = TestData.FakeHackerNews(Enumerable.Range(1, 200).Select(id => (id, TestData.Item($"story {id}", id))).ToArray());
+        foreach (var id in failing)
+            client.Setup(c => c.GetItemAsync(id, It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("down"));
+        return client;
+    }
+
+    [Test]
+    public void When_190_of_200_fail_the_refresh_is_incomplete_and_carries_the_10_that_loaded()
+    {
+        var client = TwoHundredWhereTheseFail(Enumerable.Range(11, 190));
+
+        var ex = Assert.ThrowsAsync<IncompleteRefreshException>(() => CreateRefresher(client).BuildSnapshotAsync(CancellationToken.None));
+
+        Assert.That(ex!.Failed, Is.EqualTo(190));
+        Assert.That(ex.Requested, Is.EqualTo(200));
+        Assert.That(ex.Partial.Select(s => s.Score), Is.EqualTo(Enumerable.Range(1, 10).Reverse()));
+    }
+
+    [Test]
+    public async Task Up_to_the_limit_is_complete_and_one_more_is_not()
+    {
+        var atLimit = TwoHundredWhereTheseFail(Enumerable.Range(1, 20));        // 10% of 200
+        var overLimit = TwoHundredWhereTheseFail(Enumerable.Range(1, 21));
+
+        Assert.That(await CreateRefresher(atLimit).BuildSnapshotAsync(CancellationToken.None), Has.Count.EqualTo(180));
+        Assert.ThrowsAsync<IncompleteRefreshException>(() => CreateRefresher(overLimit).BuildSnapshotAsync(CancellationToken.None));
+    }
+
+    [Test]
+    public async Task Deleted_stories_are_not_failures()
+    {
+        var client = TestData.FakeHackerNews(Enumerable.Range(1, 200).Select(id =>
+        {
+            var item = TestData.Item($"story {id}", id);
+            item.Deleted = id > 50;
+            return (id, item);
+        }).ToArray());
+
+        Assert.That(await CreateRefresher(client).BuildSnapshotAsync(CancellationToken.None), Has.Count.EqualTo(50));
+    }
+}
+
+public class ShutdownTests
+{
+    private static (StoryRefreshService Service, StoryStore Store, Task Entered) Build()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new Mock<IHackerNewsClient>();
+        client.Setup(c => c.GetBestStoryIdsAsync(It.IsAny<CancellationToken>()))
+            .Returns(async (CancellationToken ct) =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.Infinite, ct);
+                return (IReadOnlyList<int>)[];
+            });
+        var options = Options.Create(new HackerNewsOptions());
+        var store = new StoryStore();
+        var service = new StoryRefreshService(
+            new StoryRefresher(client.Object, options, NullLogger<StoryRefresher>.Instance),
+            store, options, NullLogger<StoryRefreshService>.Instance);
+        return (service, store, entered.Task);
+    }
+
+    [Test]
+    public async Task Stopping_during_the_first_refresh_releases_whoever_is_waiting_for_it()
+    {
+        var (service, store, entered) = Build();
+        await service.StartAsync(CancellationToken.None);
+        var waiting = store.GetAsync(CancellationToken.None);
+        await entered.WaitAsync(TimeSpan.FromSeconds(5)); // the first refresh is under way
+
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.That(await waiting.WaitAsync(TimeSpan.FromSeconds(5)), Is.Null);
+    }
+
+    [Test]
+    public async Task Stopping_before_the_first_refresh_has_begun_releases_whoever_is_waiting_for_it()
+    {
+        var (service, store, _) = Build();
+        var waiting = store.GetAsync(CancellationToken.None);
+
+        await service.StartAsync(new CancellationToken(canceled: true)).ContinueWith(_ => { });
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.That(await waiting.WaitAsync(TimeSpan.FromSeconds(5)), Is.Null);
+    }
+}

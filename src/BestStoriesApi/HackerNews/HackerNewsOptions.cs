@@ -13,4 +13,10 @@ public class HackerNewsOptions
 
     /// <summary>How many story details are fetched at the same time during a refresh.</summary>
     public int MaxParallelFetches { get; set; } = 10;
+
+    /// <summary>
+    /// The share of story fetches that may fail before a refresh counts as incomplete (one failure is always
+    /// allowed). An incomplete refresh never replaces a good snapshot.
+    /// </summary>
+    public double MaxFailedFetchFraction { get; set; } = 0.1;
 }

@@ -19,6 +19,7 @@ public class StoryRefresher(
         // Fetch the details a few at a time, so we never open hundreds of connections at once.
         // Each task writes to its own slot in the array, so no locking is needed.
         var found = new Story?[ids.Count];
+        var failed = 0;
         var parallelism = new ParallelOptions
         {
             MaxDegreeOfParallelism = options.Value.MaxParallelFetches,
@@ -33,18 +34,26 @@ public class StoryRefresher(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // One bad story must not spoil the whole refresh. Leave it out.
+                // One bad story must not spoil the whole refresh. Leave it out, and count it.
+                Interlocked.Increment(ref failed);
                 logger.LogWarning(ex, "Skipping story {StoryId}: it could not be loaded", ids[index]);
             }
         });
 
         // Rank the WHOLE list by score, highest first. OrderBy is stable, so equal scores
-        // keep the order Hacker News gave. Taking the first n happens later, in the controller.
+        // keep the order Hacker News gave. Taking the first n happens later, per request.
         var stories = found.OfType<Story>().OrderByDescending(s => s.Score).ToList();
 
         // Nothing usable means something is wrong upstream. Throwing keeps the old snapshot in place.
         if (stories.Count == 0)
             throw new InvalidOperationException("Hacker News returned no usable stories.");
+
+        // Failures are not independent: when Hacker News wobbles, many fetches fail together, and a ranking
+        // of the survivors can leave out the real top stories. Past the limit the refresh is incomplete, and
+        // the caller decides what to do with it. A deleted or dead story is not a failure.
+        var allowed = Math.Max(1, (int)Math.Floor(ids.Count * options.Value.MaxFailedFetchFraction));
+        if (failed > allowed)
+            throw new IncompleteRefreshException(stories, failed, ids.Count);
 
         return stories;
     }

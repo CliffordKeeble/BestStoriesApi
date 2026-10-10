@@ -24,6 +24,17 @@ public class StoryRefreshService(
         }
     }
 
+    /// <summary>
+    /// Whatever state the refresh loop reached, nobody may go on waiting for a first snapshot that will never
+    /// come: they are released and get 503. This covers a stop that lands before the loop has even started,
+    /// which the loop itself cannot see.
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+        store.RefreshFailed();
+    }
+
     private async Task RefreshOnceAsync(CancellationToken stoppingToken)
     {
         try
@@ -35,7 +46,22 @@ public class StoryRefreshService(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // The app is shutting down. Nothing to report.
+            // The app is shutting down. Release anyone still waiting for the first snapshot; they get 503.
+            store.RefreshFailed();
+        }
+        catch (IncompleteRefreshException ex) when (store.Current is null)
+        {
+            // Nothing to fall back on yet: an incomplete list is better than none, and the next refresh replaces it.
+            store.Publish(StorySnapshot.Create(ex.Partial));
+            logger.LogWarning(ex, "First refresh incomplete ({Failed} of {Requested} stories failed); serving the {Count} that loaded",
+                ex.Failed, ex.Requested, ex.Partial.Count);
+        }
+        catch (IncompleteRefreshException ex)
+        {
+            // A good snapshot is already being served. A ranking of the survivors would be worse, so keep it.
+            logger.LogWarning(ex, "Refresh incomplete ({Failed} of {Requested} stories failed); continuing to serve the previous snapshot",
+                ex.Failed, ex.Requested);
+            store.RefreshFailed();
         }
         catch (Exception ex)
         {
