@@ -5,4 +5,8 @@
   <Folder Name="/tests/">
     <Project Path="tests/BestStoriesApi.Tests/BestStoriesApi.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/FakeHackerNews/FakeHackerNews.csproj" />
+    <Project Path="tools/LoadTest/LoadTest.csproj" />
+  </Folder>
 </Solution>
