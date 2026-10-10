@@ -1,0 +1,9 @@
+Running 20s test @ http://localhost:5028/api/beststories?n=200
+  1 threads and 64 connections
+  Thread calibration: mean lat.: 1.341ms, rate sampling interval: 10ms
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.45ms    2.03ms  45.60ms   99.19%
+    Req/Sec     5.27k   766.25    21.33k    95.30%
+  99231 requests in 20.00s, 2.81GB read
+Requests/sec:   4961.39
+Transfer/sec:    144.10MB

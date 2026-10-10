@@ -1,0 +1,4 @@
+machine: Ubuntu 24.04.5 LTS; 2 logical CPUs; Intel(R) Xeon(R) Processor @ 2.80GHz; .NET 10.0.12; load generator and server on the same machine unless stated; Thread.Sleep(1) takes 1.2 ms here, so the dispatcher spins (yielding) for the last stretch before each send
+| scenario | mode | target/s | achieved/s | ok | 304 | failed | bytes | p50 ms | p90 ms | p99 ms | p99.9 ms | max ms | send lag p99 / max ms |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| floor404 wait=spin | open | 2000 | 2000 | 0 | 0 | 30000 | 0 | 0.167 | 0.260 | 1.480 | 4.509 | 7.7 | 0.90 / 7.4 | ⚠ 30000 request(s) failed or returned an unexpected status

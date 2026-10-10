@@ -1,0 +1,4 @@
+machine: Ubuntu 24.04.5 LTS; 2 logical CPUs; Intel(R) Xeon(R) Processor @ 2.80GHz; .NET 10.0.12; load generator and server on the same machine unless stated; Thread.Sleep(1) takes 1.1 ms here, so the dispatcher sleeps between sends
+| scenario | mode | target/s | achieved/s | ok | 304 | failed | bytes | p50 ms | p90 ms | p99 ms | p99.9 ms | max ms | send lag p99 / max ms |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| api_n10 wait=sleep | open | 2000 | 2000 | 30000 | 0 | 0 | 1507 | 0.986 | 1.473 | 3.238 | 9.203 | 15.8 | 1.64 / 12.5 | ⚠ 1% of requests left more than 1.6 ms after they were due: this client could not keep the schedule at 2000/s, so the result measures the client as much as the server and is not valid

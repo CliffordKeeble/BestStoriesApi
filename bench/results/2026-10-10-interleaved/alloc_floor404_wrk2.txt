@@ -1,0 +1,10 @@
+Running 20s test @ http://localhost:5028/nothing-here
+  1 threads and 64 connections
+  Thread calibration: mean lat.: 1.204ms, rate sampling interval: 10ms
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.17ms  539.65us   6.95ms   68.58%
+    Req/Sec     5.28k   361.28     8.56k    66.67%
+  99243 requests in 20.00s, 9.37MB read
+  Non-2xx or 3xx responses: 99243
+Requests/sec:   4961.88
+Transfer/sec:    479.71KB
