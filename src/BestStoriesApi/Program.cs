@@ -1,3 +1,4 @@
+using BestStoriesApi.Api;
 using BestStoriesApi.HackerNews;
 using BestStoriesApi.Stories;
 using Microsoft.Extensions.Options;
@@ -20,7 +21,7 @@ builder.Services.AddSingleton<StoryRefresher>();
 builder.Services.AddSingleton<StoryStore>();
 builder.Services.AddHostedService<StoryRefreshService>();
 
-builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -32,7 +33,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.MapControllers();
+app.MapBestStories();
 
 app.Run();
 
