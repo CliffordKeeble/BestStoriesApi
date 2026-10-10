@@ -23,7 +23,7 @@ builder.Services.AddHostedService<StoryRefreshService>();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(o => o.OperationFilter<BestStoriesOpenApi>());
 
 var app = builder.Build();
 

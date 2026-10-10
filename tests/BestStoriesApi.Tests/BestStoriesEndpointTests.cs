@@ -111,6 +111,8 @@ public class BestStoriesEndpointTests
         var response = await http.GetAsync("/api/beststories?n=5");
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
+        Assert.That(response.Headers.RetryAfter?.Delta, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("application/problem+json"));
     }
 
     [TestCase("/api/beststories")]
@@ -128,6 +130,7 @@ public class BestStoriesEndpointTests
         var response = await http.GetAsync(url);
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+        Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("application/problem+json"));
     }
 
     [Test]

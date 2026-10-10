@@ -1,6 +1,7 @@
+using System.Buffers;
 using System.Globalization;
-using System.Text.Json;
 using BestStoriesApi.Stories;
+using Microsoft.Extensions.Primitives;
 
 namespace BestStoriesApi.Api;
 
@@ -14,19 +15,27 @@ public static class BestStoriesEndpoint
             .WithName("GetBestStories")
             .WithSummary("The n highest-scoring of Hacker News's best stories, highest first.")
             .Produces<IEnumerable<Story>>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status304NotModified)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
-    private static async Task HandleAsync(HttpContext context, StoryStore store)
+    private static Task HandleAsync(HttpContext context, StoryStore store)
     {
         if (!TryReadN(context.Request.Query["n"], out var n))
         {
-            await Results.Problem(
+            return Results.Problem(
                 statusCode: StatusCodes.Status400BadRequest,
                 detail: "Query parameter 'n' is required and must be a whole number of at least 1.").ExecuteAsync(context);
-            return;
         }
 
+        // The usual case: a snapshot is already there, so answer without waiting for anything.
+        var snapshot = store.Current;
+        return snapshot is not null ? WriteAsync(context, snapshot, n) : WaitForFirstSnapshotAsync(context, store, n);
+    }
+
+    /// <summary>Only before the first refresh has finished: wait for that one refresh, never start another.</summary>
+    private static async Task WaitForFirstSnapshotAsync(HttpContext context, StoryStore store, int n)
+    {
         var snapshot = await store.GetAsync(context.RequestAborted);
         if (snapshot is null)
         {
@@ -36,13 +45,45 @@ public static class BestStoriesEndpoint
                 detail: "Stories are not available yet. Try again shortly.").ExecuteAsync(context);
             return;
         }
+        await WriteAsync(context, snapshot, n);
+    }
 
-        context.Response.ContentType = "application/json; charset=utf-8";
-        await JsonSerializer.SerializeAsync(context.Response.Body, snapshot.Take(n), StoryJsonContext.Default.IEnumerableStory, context.RequestAborted);
+    /// <summary>Copies the pre-built answer to the response. No serialisation happens here.</summary>
+    private static async Task WriteAsync(HttpContext context, StorySnapshot snapshot, int n)
+    {
+        var response = context.Response;
+        var etag = snapshot.ETag(n);
+        response.Headers.ETag = etag;
+        response.Headers.CacheControl = "no-cache"; // a client may keep it, but asks again; the answer is then 304
+
+        if (Matches(context.Request.Headers.IfNoneMatch, etag))
+        {
+            response.StatusCode = StatusCodes.Status304NotModified;
+            return;
+        }
+
+        response.ContentType = "application/json; charset=utf-8";
+        response.ContentLength = snapshot.Length(n);
+        var body = response.BodyWriter;
+        body.Write(snapshot.Head(n).Span);
+        body.Write(StorySnapshot.Tail.Span);
+        await body.FlushAsync(context.RequestAborted);
+    }
+
+    /// <summary>If-None-Match holds our tag, or "*". Weak comparison, as RFC 9110 asks of If-None-Match.</summary>
+    private static bool Matches(StringValues ifNoneMatch, string etag)
+    {
+        foreach (var value in ifNoneMatch)
+        {
+            if (value is null) continue;
+            if (value.Trim() == "*" || value.AsSpan().IndexOf(etag.AsSpan(), StringComparison.Ordinal) >= 0)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>n must be a whole number of at least 1. More than there are returns them all.</summary>
-    private static bool TryReadN(Microsoft.Extensions.Primitives.StringValues values, out int n)
+    private static bool TryReadN(StringValues values, out int n)
     {
         n = 0;
         return values.Count > 0

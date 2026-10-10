@@ -28,7 +28,8 @@ public class StoryRefreshService(
     {
         try
         {
-            var snapshot = await refresher.BuildSnapshotAsync(stoppingToken);
+            var stories = await refresher.BuildSnapshotAsync(stoppingToken);
+            var snapshot = StorySnapshot.Create(stories); // serialise once here, not once per request
             store.Publish(snapshot);
             logger.LogInformation("Refreshed best stories: {Count} stories", snapshot.Count);
         }
