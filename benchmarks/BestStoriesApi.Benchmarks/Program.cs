@@ -35,7 +35,7 @@ public class RequestPath
                 $"user{i % 37}", now.AddMinutes(-10 * i), random.Next(50, 2500), random.Next(0, 900)))
             .OrderByDescending(s => s.Score)
             .ToArray();
-        _snapshot = StorySnapshot.Create(_stories, DateTimeOffset.UnixEpoch);
+        _snapshot = StorySnapshot.Create(_stories, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
     }
 
     [Benchmark(Baseline = true, Description = "serialise per request (before)")]
@@ -73,5 +73,5 @@ public class SnapshotBuild
     }
 
     [Benchmark(Description = "build a 200-story snapshot (once per refresh)")]
-    public StorySnapshot Build() => StorySnapshot.Create(_stories, DateTimeOffset.UnixEpoch);
+    public StorySnapshot Build() => StorySnapshot.Create(_stories, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
 }

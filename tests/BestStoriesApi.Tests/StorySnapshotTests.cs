@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using BestStoriesApi.Stories;
@@ -25,13 +26,22 @@ public class StorySnapshotTests
     private static string AsTheControllerWroteIt(IEnumerable<Story> stories) =>
         JsonSerializer.Serialize(stories, WebDefaults);
 
+    private static StorySnapshot Build(IReadOnlyList<Story> stories) => StorySnapshot.Create(stories, Example, Example.AddMinutes(1));
+
     private static string Answer(StorySnapshot snapshot, int n) =>
         Encoding.UTF8.GetString(snapshot.Head(n).Span) + Encoding.UTF8.GetString(StorySnapshot.Tail.Span);
+
+    private static string Gunzip(ReadOnlyMemory<byte> gzipped)
+    {
+        using var unzipped = new GZipStream(new MemoryStream(gzipped.ToArray()), CompressionMode.Decompress);
+        using var reader = new StreamReader(unzipped, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
 
     [Test]
     public void Every_answer_is_byte_for_byte_what_serialising_per_request_produced()
     {
-        var snapshot = StorySnapshot.Create(Awkward, Example);
+        var snapshot = Build(Awkward);
 
         for (var n = 1; n <= Awkward.Length + 3; n++)
         {
@@ -44,7 +54,7 @@ public class StorySnapshotTests
     [Test]
     public void The_answer_for_n_is_valid_JSON_holding_n_stories_and_more_than_there_are_gives_all()
     {
-        var snapshot = StorySnapshot.Create(Awkward, Example);
+        var snapshot = Build(Awkward);
 
         Assert.That(JsonDocument.Parse(Answer(snapshot, 1)).RootElement.GetArrayLength(), Is.EqualTo(1));
         Assert.That(JsonDocument.Parse(Answer(snapshot, 3)).RootElement.GetArrayLength(), Is.EqualTo(3));
@@ -54,8 +64,8 @@ public class StorySnapshotTests
     [Test]
     public void The_tag_depends_only_on_the_content_so_an_unchanged_answer_keeps_its_tag_across_refreshes()
     {
-        var first = StorySnapshot.Create(Awkward, Example);
-        var second = StorySnapshot.Create(Awkward.Select(s => s with { }).ToArray(), Example);
+        var first = Build(Awkward);
+        var second = Build(Awkward.Select(s => s with { }).ToArray());
 
         for (var n = 1; n <= Awkward.Length; n++)
             Assert.That(second.ETag(n), Is.EqualTo(first.ETag(n)), $"n = {n}");
@@ -64,10 +74,10 @@ public class StorySnapshotTests
     [Test]
     public void A_change_to_story_k_changes_the_tag_for_every_n_that_includes_it_and_no_other()
     {
-        var before = StorySnapshot.Create(Awkward, Example);
+        var before = Build(Awkward);
         var changed = Awkward.ToArray();
         changed[2] = changed[2] with { CommentCount = changed[2].CommentCount + 1 };
-        var after = StorySnapshot.Create(changed, Example);
+        var after = Build(changed);
 
         Assert.That(after.ETag(1), Is.EqualTo(before.ETag(1)));
         Assert.That(after.ETag(2), Is.EqualTo(before.ETag(2)));
@@ -76,9 +86,44 @@ public class StorySnapshotTests
     }
 
     [Test]
+    public void Every_gzipped_answer_unzips_to_the_plain_one()
+    {
+        var snapshot = Build(Awkward);
+
+        for (var n = 1; n <= Awkward.Length + 3; n++)
+            Assert.That(Gunzip(snapshot.Gzipped(n)), Is.EqualTo(Answer(snapshot, n)), $"n = {n}");
+        Assert.That(Gunzip(Build([]).Gzipped(1)), Is.EqualTo("[]"));
+    }
+
+    [Test]
+    public void A_long_answer_is_actually_compressed()
+    {
+        var fifty = Enumerable.Range(0, 10).SelectMany(_ => Awkward).ToArray();
+        var snapshot = Build(fifty);
+
+        Assert.That(snapshot.Gzipped(50).Length, Is.LessThan(snapshot.Length(50) / 2));
+    }
+
+    [Test]
+    public void Gzipped_answers_have_tags_of_their_own_that_survive_unchanged_refreshes()
+    {
+        var first = Build(Awkward);
+        var second = Build(Awkward.Select(s => s with { }).ToArray());
+        var gzipTags = Enumerable.Range(1, Awkward.Length).Select(first.GzipETag).ToList();
+
+        Assert.That(gzipTags, Is.Unique);
+        Assert.That(gzipTags, Is.All.StartWith("\"").And.EndWith("\""));
+        for (var n = 1; n <= Awkward.Length; n++)
+        {
+            Assert.That(first.GzipETag(n), Is.Not.EqualTo(first.ETag(n)), $"n = {n}");
+            Assert.That(second.GzipETag(n), Is.EqualTo(first.GzipETag(n)), $"n = {n}");
+        }
+    }
+
+    [Test]
     public void Tags_differ_between_n_and_are_quoted_as_HTTP_requires()
     {
-        var snapshot = StorySnapshot.Create(Awkward, Example);
+        var snapshot = Build(Awkward);
         var tags = Enumerable.Range(1, Awkward.Length).Select(snapshot.ETag).ToList();
 
         Assert.That(tags, Is.Unique);

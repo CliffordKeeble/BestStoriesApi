@@ -13,6 +13,11 @@ public static class BestStoriesEndpoint
 {
     public const string Route = "/api/beststories";
 
+    // The Cache-Control value for the current max-age, shared until max-age changes, so it is built about once a
+    // second rather than once a request (Kestrel does the same for its Date header). Requests may race to replace
+    // it; each builds the right value for its own max-age, so whichever is kept is right.
+    private static volatile CacheControlHeader s_cacheControl = new(-1, "");
+
     public static IEndpointConventionBuilder MapBestStories(this IEndpointRouteBuilder app) =>
         app.MapMethods(Route, [HttpMethods.Get, HttpMethods.Head], HandleAsync)
             .WithName("GetBestStories")
@@ -23,7 +28,7 @@ public static class BestStoriesEndpoint
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
     private static Task HandleAsync(
-        HttpContext context, StoryStore store, IOptions<HackerNewsOptions> options, ILoggerFactory loggers)
+        HttpContext context, StoryStore store, IOptions<HackerNewsOptions> options, TimeProvider clock, ILoggerFactory loggers)
     {
         if (!TryReadN(context.Request.Query["n"], out var n))
         {
@@ -35,8 +40,8 @@ public static class BestStoriesEndpoint
         // The usual case: a snapshot is already there, so answer without waiting for anything.
         var snapshot = store.Current;
         return snapshot is not null
-            ? WriteAsync(context, snapshot, n)
-            : WaitForFirstSnapshotAsync(context, store, options.Value, loggers, n);
+            ? WriteAsync(context, snapshot, n, clock)
+            : WaitForFirstSnapshotAsync(context, store, options.Value, clock, loggers, n);
     }
 
     /// <summary>
@@ -44,7 +49,7 @@ public static class BestStoriesEndpoint
     /// longer than FirstSnapshotWait.
     /// </summary>
     private static async Task WaitForFirstSnapshotAsync(
-        HttpContext context, StoryStore store, HackerNewsOptions settings, ILoggerFactory loggers, int n)
+        HttpContext context, StoryStore store, HackerNewsOptions settings, TimeProvider clock, ILoggerFactory loggers, int n)
     {
         StorySnapshot? snapshot;
         var timedOut = false;
@@ -71,16 +76,22 @@ public static class BestStoriesEndpoint
                 detail: "Stories are not available yet. Try again shortly.").ExecuteAsync(context);
             return;
         }
-        await WriteAsync(context, snapshot, n);
+        await WriteAsync(context, snapshot, n, clock);
     }
 
-    /// <summary>Copies the pre-built answer to the response. No serialisation happens here.</summary>
-    private static async Task WriteAsync(HttpContext context, StorySnapshot snapshot, int n)
+    /// <summary>
+    /// Copies the pre-built answer to the response, gzipped if the client accepts that. No serialisation and no
+    /// compression happen here.
+    /// </summary>
+    private static async Task WriteAsync(HttpContext context, StorySnapshot snapshot, int n, TimeProvider clock)
     {
         var response = context.Response;
-        var etag = snapshot.ETag(n);
+        // Gzip is built with the snapshot. Why, and when to take it out: the comment in StorySnapshot.Create.
+        var gzip = AcceptEncoding.AllowsGzip(context.Request.Headers.AcceptEncoding);
+        var etag = gzip ? snapshot.GzipETag(n) : snapshot.ETag(n);
         response.Headers.ETag = etag;
-        response.Headers.CacheControl = "no-cache"; // a client may keep it, but asks again; the answer is then 304
+        response.Headers.CacheControl = CacheControl(snapshot, clock);
+        response.Headers.Vary = "Accept-Encoding"; // the body depends on it, so a cache must keep one copy per encoding
 
         if (Matches(context.Request.Headers.IfNoneMatch, etag))
         {
@@ -89,15 +100,41 @@ public static class BestStoriesEndpoint
         }
 
         response.ContentType = "application/json; charset=utf-8";
-        response.ContentLength = snapshot.Length(n);
+        if (gzip)
+            response.Headers.ContentEncoding = "gzip";
+        response.ContentLength = gzip ? snapshot.Gzipped(n).Length : snapshot.Length(n);
         if (HttpMethods.IsHead(context.Request.Method))
             return; // HEAD: the same headers as GET, and no body
 
         var body = response.BodyWriter;
-        body.Write(snapshot.Head(n).Span);
-        body.Write(StorySnapshot.Tail.Span);
+        if (gzip)
+        {
+            body.Write(snapshot.Gzipped(n).Span);
+        }
+        else
+        {
+            body.Write(snapshot.Head(n).Span);
+            body.Write(StorySnapshot.Tail.Span);
+        }
         await body.FlushAsync(context.RequestAborted);
     }
+
+    /// <summary>
+    /// No newer answer can exist before the next refresh, so a client, or a shared cache such as a CDN, may keep this
+    /// one until the refresh is due without asking again. max-age counts down to that moment, rounded down, and is 0
+    /// once it has passed: then a cache asks again with the ETag, and while the stories have not changed it gets a
+    /// 304. A 304 carries the countdown too, so the cache can keep its copy until the following refresh.
+    /// </summary>
+    private static string CacheControl(StorySnapshot snapshot, TimeProvider clock)
+    {
+        var maxAge = Math.Max(0, (long)(snapshot.NextRefreshDue - clock.GetUtcNow()).TotalSeconds);
+        var header = s_cacheControl;
+        if (header.MaxAge != maxAge)
+            s_cacheControl = header = new CacheControlHeader(maxAge, string.Create(CultureInfo.InvariantCulture, $"public, max-age={maxAge}"));
+        return header.Value;
+    }
+
+    private sealed record CacheControlHeader(long MaxAge, string Value);
 
     /// <summary>If-None-Match holds our tag, or "*". Weak comparison, as RFC 9110 asks of If-None-Match.</summary>
     private static bool Matches(StringValues ifNoneMatch, string etag)

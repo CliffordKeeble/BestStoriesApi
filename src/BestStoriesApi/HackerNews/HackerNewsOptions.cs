@@ -8,7 +8,7 @@ public class HackerNewsOptions
     /// <summary>Base address of the Hacker News API. Must end with a slash.</summary>
     public string BaseAddress { get; set; } = "https://hacker-news.firebaseio.com/v0/";
 
-    /// <summary>How often the snapshot of best stories is rebuilt.</summary>
+    /// <summary>How long after a refresh finishes the next one starts: about how often the snapshot is rebuilt.</summary>
     public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromMinutes(1);
 
     /// <summary>How many story details are fetched at the same time during a refresh.</summary>

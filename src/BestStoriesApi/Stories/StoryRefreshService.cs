@@ -4,7 +4,7 @@ using Microsoft.Extensions.Options;
 namespace BestStoriesApi.Stories;
 
 /// <summary>
-/// Runs for the life of the app and rebuilds the snapshot on a fixed interval. There is
+/// Runs for the life of the app and rebuilds the snapshot one interval after the last refresh finished. There is
 /// exactly one of these, so there is one refresh at a time however many callers arrive.
 /// </summary>
 public class StoryRefreshService(
@@ -34,9 +34,12 @@ public class StoryRefreshService(
             wait = Shorter(wait * 2, settings.RefreshInterval);
         }
 
-        using var timer = new PeriodicTimer(settings.RefreshInterval);
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        // Each refresh starts one interval after the last one finished, never sooner. So a snapshot's NextRefreshDue
+        // always holds, and a Hacker News slow enough to stretch a refresh past the interval is not asked again
+        // straight away. (A fixed-rate timer would start the next refresh at once after an overrun.)
+        while (!stoppingToken.IsCancellationRequested)
         {
+            await Task.Delay(settings.RefreshInterval, stoppingToken);
             await RefreshOnceAsync(stoppingToken);
         }
     }
@@ -55,10 +58,13 @@ public class StoryRefreshService(
     private async Task RefreshOnceAsync(CancellationToken stoppingToken)
     {
         logger.LogRefreshStarted();
+        var interval = options.Value.RefreshInterval;
         try
         {
             var stories = await refresher.BuildSnapshotAsync(stoppingToken);
-            var snapshot = StorySnapshot.Create(stories, clock.GetUtcNow()); // serialise once here, not once per request
+            // The next refresh starts one interval after this one finishes, so nothing newer can appear before then.
+            var builtAt = clock.GetUtcNow();
+            var snapshot = StorySnapshot.Create(stories, builtAt, builtAt + interval); // serialise once here, not once per request
             store.Publish(snapshot);
             logger.LogRefreshed(snapshot.Count);
         }
@@ -70,7 +76,8 @@ public class StoryRefreshService(
         catch (IncompleteRefreshException ex) when (store.Current is null)
         {
             // Nothing to fall back on yet: an incomplete list is better than none, and the next refresh replaces it.
-            store.Publish(StorySnapshot.Create(ex.Partial, clock.GetUtcNow()));
+            var builtAt = clock.GetUtcNow();
+            store.Publish(StorySnapshot.Create(ex.Partial, builtAt, builtAt + interval));
             logger.LogFirstRefreshIncomplete(ex, ex.Failed, ex.Requested, ex.Partial.Count);
         }
         catch (IncompleteRefreshException ex)

@@ -19,12 +19,14 @@ GET /api/beststories?n=10
 ]
 ```
 
-**In one line:** callers never cause a call to Hacker News, and a request for stories never runs a serialiser. Hacker News is read once a minute in the background. The answer for every `n` is built then, once, as bytes, and a request copies a slice of those bytes to the socket.
+**In one line:** callers never cause a call to Hacker News, and a request for stories never runs a serialiser or a compressor. Hacker News is read once a minute in the background. The answer for every `n` is built then, once, as bytes, plain and gzipped, and a request copies those bytes to the socket.
 
 On one core of a small cloud VM, measured against the first version with the two builds interleaved run by run:
 - **Most requests per second:** `n=10` went from 24,600 to 44,100, and `n=200` from 10,600 to 24,200.
 - **p99 for `n=200` at 7,500 requests/s:** 32 ms before, 3.3 ms after.
 - **Hacker News:** 201 calls per refresh, once a minute, however many callers there are.
+
+Since then, answers are also gzipped in advance for clients that accept it. On 200 real stories that makes `n=200` 2.9 times smaller, and one core served 44,100 of them a second instead of 29,300 (11 October).
 
 The numbers, how they were measured and how to reproduce them are in [`docs/performance.md`](docs/performance.md).
 
@@ -74,14 +76,15 @@ Neither endpoint calls Hacker News, and both answer with `Cache-Control: no-stor
 dotnet test
 ```
 
-65 tests, NUnit and Moq. None needs a network, and together they take a few seconds. Most replace the Hacker News client with a Moq fake; one keeps the real client and its whole HTTP pipeline, and replaces only the network beneath it. Among them:
+95 tests, NUnit and Moq. None needs a network, and together they take a few seconds. Most replace the Hacker News client with a Moq fake; one keeps the real client and its whole HTTP pipeline, and replaces only the network beneath it. Among them:
 - the real client asks for exactly the two addresses the brief names, and turns the brief's example story into the brief's example answer;
 - the pre-built answer for every `n` is byte for byte what serialising per request produced, for awkward input: no link, non-ASCII, quotes, HTML characters;
 - fifty requests at cold start cause exactly one refresh;
 - a refresh in which most stories fail does not replace a good snapshot, and a story that times out or comes back empty counts as failed;
 - a story that fails keeps its last good version for up to two refreshes, and still counts as failed;
 - a failed first refresh is tried again within seconds, then less and less often while Hacker News keeps failing;
-- a client that sends its ETag back gets 304, and HEAD gets the GET headers with no body;
+- max-age counts down to when the next refresh is due, a client that sends its ETag back gets 304 with the same countdown, and HEAD gets the GET headers with no body;
+- a client that accepts gzip gets the same answer gzipped, with its own tag and its own 304, and `Accept-Encoding` is read as the RFC says, including a weight of zero and malformed values;
 - stopping the app releases anyone still waiting for the first snapshot, even when the refresh loop never started;
 - a setting that cannot work stops the app at start, naming the setting;
 - readiness is 503 until there is a snapshot, then gives the number of stories and their age, and turns `Degraded` after three refresh intervals.
@@ -97,7 +100,7 @@ Settings are read from the `HackerNews` section of the configuration. Their defa
 | Setting | Default | Meaning |
 |---|---|---|
 | `BaseAddress` | `https://hacker-news.firebaseio.com/v0/` | The Hacker News API. Must end with `/`. |
-| `RefreshInterval` | `00:01:00` | How often the snapshot is rebuilt. |
+| `RefreshInterval` | `00:01:00` | How long after a refresh finishes the next one starts. |
 | `MaxParallelFetches` | `10` | How many story details are fetched at once during a refresh. |
 | `MaxFailedFetchFraction` | `0.1` | The share of story fetches that may fail before a refresh counts as incomplete (see below). |
 | `FirstSnapshotWait` | `00:00:30` | The longest a request waits for the first snapshot after start-up before it gets 503. |
@@ -118,7 +121,7 @@ Any of these can be set from the environment, for example `HackerNews__BaseAddre
 
 The rule that does the work: **a caller's request never causes a call to Hacker News.**
 
-- **One background refresher.** A hosted service rebuilds the snapshot every `RefreshInterval`. There is one such service and it does one refresh at a time, so calls to Hacker News are set by the clock, not by the callers.
+- **One background refresher.** A hosted service rebuilds the snapshot `RefreshInterval` after the last refresh finished. There is one such service and it does one refresh at a time, so calls to Hacker News are set by the clock, not by the callers, and a slow Hacker News is never asked again straight away.
   - Each refresh makes one id-list call and about 200 story calls.
   - Measured: 402 calls in two minutes with no callers, at 5,000 requests/s and at 20,000 requests/s.
   - That is a floor, not a fixed figure: the standard resilience handler retries a failed call up to three times. A bad minute upstream can therefore cost up to four times as many calls. Callers cannot raise it; Hacker News's own errors can.
@@ -143,17 +146,24 @@ Once the upstream is out of the request path, what is left is the cost of buildi
   - When a refresh finishes, `StorySnapshot` writes the JSON for the whole ranked list once, `[s0,s1,...,s199]`, and records where each story ends.
   - The answer for `n` is the buffer up to the end of story `n-1`, plus `]`. A request copies that slice to the response.
   - No serialiser runs, and the copy allocates nothing. What a larger answer still costs is the copy itself: in isolation 37 ns for `n=10` and 0.95 µs for `n=200`, where serialising took 3.2 µs and 64 µs.
-  - Building the snapshot takes a few hundred microseconds, once a minute.
+  - Building the snapshot takes a few hundred microseconds, once a minute; gzipping every answer adds about 125 ms (below).
 - **One writer, many readers, no locks.** The refresher builds a complete new snapshot and publishes it by swapping a single reference.
   - A request reads that reference once and uses that snapshot to the end, so it can never see a half-built list.
   - No reader ever waits for the writer or for another reader. The snapshot is immutable once published.
   - This is the read-copy-update pattern: readers have no lock to queue on, however many there are.
-- **A minimal endpoint, not an MVC controller.** The handler reads `n`, takes the current snapshot and writes bytes, with a `Content-Length`. No model binding, no action filters, no content negotiation.
+- **A minimal endpoint, not an MVC controller.** The handler reads `n`, takes the current snapshot and writes bytes, with a `Content-Length`. No model binding, no action filters, and no content negotiation beyond `Accept-Encoding`.
   - Its own allocation is about 700 bytes a request, the same for any `n`: query parsing, headers and the flush. An empty 404 from the same server costs about 3,200 bytes; the endpoint's total is about 3,900.
-- **ETag and 304.** Each answer carries a strong ETag computed from its content, and `Cache-Control: no-cache`. A client that sends the tag back in `If-None-Match` gets `304 Not Modified` with no body. HEAD gets the same headers as GET.
-  - The tag depends only on the stories in that answer, so it survives refreshes in which they did not change.
-  - The snapshot changes at most once a minute. A client polling faster than that gets 304 for every request but the first after a change. One polling slower rarely does, because live scores move every minute.
-  - Measured with scores held still, `n=200`: about 1.65 times the responses, at about a hundredth of the bytes.
+- **Caching: max-age, ETag and 304.** Each answer carries `Cache-Control: public, max-age=N` and a strong ETag computed from its content. HEAD gets the same headers as GET.
+  - N is the seconds left until the next refresh is due. Nothing newer can exist before then, so a browser, or a CDN in front of the API, can answer from its own copy until then without asking.
+  - While that refresh runs, a second or two, N is 0 and a cache asks every time, with the tag in `If-None-Match`. If the stories in that answer have not changed, it gets `304 Not Modified` with no body. A 304 carries the countdown too.
+  - So behind a CDN the API sees about one request a refresh for each `n` and CDN location, plus quick 304s while a refresh runs, however many clients there are.
+  - The tag depends only on the stories in that answer, so it survives refreshes in which they did not change. Live scores move every minute, though, so a large answer has usually changed: for those, most of the saving comes from max-age, not from 304s.
+  - Measured with scores held still, `n=200`: 304s gave about 1.65 times the responses, at about a hundredth of the bytes.
+- **Gzip, built in advance.** A client that sends `Accept-Encoding: gzip` gets the same answer gzipped, with a tag of its own, and every answer says `Vary: Accept-Encoding`.
+  - Every answer is gzipped when the snapshot is built, so a request copies bytes either way. On 200 real stories, `n=200` goes from 44,065 bytes to 15,408, and one core served 44,100 a second instead of 29,300. For `n=10` it made no difference.
+  - Gzipping `n=200` per request instead, with ASP.NET Core's response compression middleware, managed 1,500 a second.
+  - The cost is about 125 ms of one core per refresh and 1.5 MB of memory. The case for it, and when to take it out, is written next to the code in `StorySnapshot.cs`.
+  - The answers hold no secrets and echo nothing from the request, so compressing them over HTTPS does not open the BREACH attack.
 
 Each change was measured as a step against the one before; see [`docs/performance.md`](docs/performance.md). Two parts were not measured on their own: the lock-free read path (it came with the first version), and the resilience handler.
 
@@ -172,23 +182,20 @@ The figures at the top of this page are from [`docs/performance.md`](docs/perfor
 5. **`time` is ISO 8601 with a UTC offset**, for example `2019-10-12T13:43:01+00:00`. Hacker News gives Unix seconds, which are converted.
 6. **`commentCount` is Hacker News's `descendants`** (all comments, including replies). It is `0` if Hacker News gives none.
 7. **Deleted and dead items are left out**, as is any story whose title or author is missing. A missing title or author counts as a failed fetch; a deleted or dead story does not.
-8. **Data is normally at most one refresh old** (a minute, plus however long the refresh took).
-   - While refreshes keep failing, the last good snapshot is served for as long as they fail, with an unchanged ETag. Nothing in a story answer says how old it is, but `/health/ready` reports the snapshot's age, and turns `Degraded` after three refresh intervals. A story kept from an earlier refresh can be up to two refreshes older than its snapshot.
+8. **Data is normally at most one refresh old** (a minute, plus however long the refresh took), and so is a cached copy: its max-age runs out when the next refresh is due.
+   - While refreshes keep failing, the last good snapshot is served for as long as they fail, with an unchanged ETag and max-age 0, so a cache checks every time and picks up the next good snapshot at once. Nothing in a story answer says how old it is, but `/health/ready` reports the snapshot's age, and turns `Degraded` after three refresh intervals. A story kept from an earlier refresh can be up to two refreshes older than its snapshot.
 9. **If the very first refresh fails**, or has not finished within `FirstSnapshotWait`, requests get `503 Service Unavailable` until a refresh succeeds. `Retry-After` is `FirstSnapshotRetryInterval` (5 s), the soonest a failed first refresh is tried again.
 10. **One instance.** The snapshot lives in the memory of the running process.
 
 ## What I would do next, given time
 
 - **Say how old the data is in every answer,** with a `Last-Modified` header. Readiness and the snapshot's age are already at `/health/ready`.
-- **Several instances.** Each instance currently builds its own snapshot, which multiplies the upstream calls by the number of instances. A shared cache (Redis, say) with one elected refresher would keep it to one set of calls. With several instances, the ETag already lets a CDN or reverse proxy in front absorb most of the traffic.
+- **Several instances.** Each instance currently builds its own snapshot, which multiplies the upstream calls by the number of instances. A shared cache (Redis, say) with one elected refresher would keep it to one set of calls. With several instances, max-age and the ETag already let a CDN or reverse proxy in front absorb most of the traffic.
 - **An incremental refresh,** fetching only the stories Hacker News lists as changed in `/v0/updates.json`, plus any new ids, would cut the 200 story calls a minute to however many changed. **I left it out on purpose.**
   - It is only correct if `updates.json` covers at least one refresh interval, and that cannot be measured without the live API. If the window is shorter, scores go stale with nothing to show it.
   - The safe form polls `updates.json` every few seconds, gathers what changed between refreshes, and does a full refresh every ten minutes as a backstop.
   - It is worth building once its saving has been measured against the real API.
-- **Pre-compressed answers:** gzip or Brotli for each `n`, built with the snapshot, so compression costs nothing per request.
-  - On the fake's data gzip makes the `n=200` answer 8.6 times smaller (30,240 bytes to 3,501); real titles vary more and will compress less.
-  - Each encoding needs a tag of its own, since a strong ETag must not cover two different bodies.
-  - It does not help over loopback, so its latency effect is not measured here.
+- **Brotli as well as gzip** is not worth a second encoding yet. On the real `n=200` answer, Brotli at a quality as quick to build as gzip is 5% smaller; at its best quality it is 19% smaller, but building every answer that way takes about 40 times as long (see [`docs/performance.md`](docs/performance.md)).
 - **Rate limiting on our own endpoint** (ASP.NET Core's built-in rate limiter), so one client cannot hog the API.
 - **Metrics and tracing** (OpenTelemetry): snapshot age, refresh duration, stories skipped and failed, upstream failures, request latency histograms.
 - **Tests of the retry, timeout and circuit-breaker settings.** One test runs the real client and its whole pipeline with only the network replaced, but on the happy path. The settings themselves are Microsoft's defaults, and are not tested here.
@@ -200,13 +207,14 @@ The figures at the top of this page are from [`docs/performance.md`](docs/perfor
 ```
 src/BestStoriesApi/
   Api/BestStoriesEndpoint.cs        the endpoint: validate n, take the current snapshot, write its bytes, 304, or HEAD
+  Api/AcceptEncoding.cs             reads Accept-Encoding: does the client take gzip
   Api/BestStoriesOpenApi.cs         describes n to Swagger (Development only)
   Api/ApiLog.cs                     the endpoint's one log message: a 503 sent before the first snapshot (Debug)
   Api/SnapshotReadinessCheck.cs     readiness: is there a snapshot, how many stories, how old; Degraded after three refresh intervals
   Api/HealthResponseWriter.cs       writes a health report as one small JSON object
-  Stories/StorySnapshot.cs          the ranked stories serialised once, with each story's end offset, each answer's ETag, and when it was built
+  Stories/StorySnapshot.cs          the ranked stories serialised once, with each story's end offset, each answer's ETag, each answer gzipped with its own ETag, when it was built and when the next refresh is due
   Stories/StoryStore.cs             holds the current snapshot; one writer swaps it, readers never wait
-  Stories/StoryRefreshService.cs    background loop: refresh now, retry soon until there is a snapshot, then every interval; keeps the old snapshot on a bad refresh
+  Stories/StoryRefreshService.cs    background loop: refresh now, retry soon until there is a snapshot, then one interval after each refresh; keeps the old snapshot on a bad refresh
   Stories/StoryRefresher.cs         fetches, counts failures, keeps a failed story's last good version for two refreshes, ranks the whole list
   Stories/IncompleteRefreshException.cs   a refresh in which too many stories failed, carrying what did load
   Stories/StoryJsonContext.cs       the JSON shape, generated at compile time

@@ -1,0 +1,13 @@
+Running 10s test @ http://localhost:5028/api/beststories?n=200
+  1 threads and 64 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     2.10ms    1.35ms  34.35ms   97.01%
+    Req/Sec    31.24k     3.23k   35.60k    75.00%
+  Latency Distribution
+     50%    1.98ms
+     75%    2.23ms
+     90%    2.53ms
+     99%    4.89ms
+  310701 requests in 10.01s, 12.81GB read
+Requests/sec:  31027.08
+Transfer/sec:      1.28GB

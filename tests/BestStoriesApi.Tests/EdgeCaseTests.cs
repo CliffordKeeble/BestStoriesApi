@@ -25,6 +25,7 @@ public class EdgeCaseTests
 
         Assert.That(head.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(head.Headers.ETag, Is.EqualTo(get.Headers.ETag));
+        Assert.That(head.Headers.CacheControl?.MaxAge, Is.InRange(TimeSpan.FromMinutes(59), TimeSpan.FromHours(1)));
         Assert.That(head.Content.Headers.ContentLength, Is.EqualTo((await get.Content.ReadAsByteArrayAsync()).Length));
         Assert.That(await head.Content.ReadAsByteArrayAsync(), Is.Empty);
     }

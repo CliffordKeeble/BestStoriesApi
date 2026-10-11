@@ -1,16 +1,22 @@
 using System.Net;
 using System.Net.Http.Headers;
+using Moq;
 
 namespace BestStoriesApi.Tests;
 
-/// <summary>ETag and If-None-Match: a client that already holds the answer gets 304 and no body.</summary>
+/// <summary>
+/// Caching: max-age says how long a copy stays current, and ETag with If-None-Match lets a client that already
+/// holds the answer get 304 and no body.
+/// </summary>
 public class ConditionalRequestTests
 {
+    private static readonly DateTimeOffset MondayMorning = new(2026, 10, 12, 9, 0, 0, TimeSpan.Zero);
+
     private static BestStoriesApiFactory App() => new(TestData.FakeHackerNews(
         (1, TestData.Item("one", 30)), (2, TestData.Item("two", 20)), (3, TestData.Item("three", 10))));
 
     [Test]
-    public async Task A_200_carries_an_ETag_no_cache_and_a_Content_Length()
+    public async Task A_200_carries_an_ETag_a_public_max_age_and_a_Content_Length()
     {
         await using var app = App();
         using var http = app.CreateClient();
@@ -19,8 +25,36 @@ public class ConditionalRequestTests
 
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         Assert.That(response.Headers.ETag, Is.Not.Null);
-        Assert.That(response.Headers.CacheControl?.NoCache, Is.True);
+        Assert.That(response.Headers.CacheControl?.Public, Is.True);
+        // The factory refreshes hourly, and this snapshot has only just been built.
+        Assert.That(response.Headers.CacheControl?.MaxAge, Is.InRange(TimeSpan.FromMinutes(59), TimeSpan.FromHours(1)));
         Assert.That(response.Content.Headers.ContentLength, Is.EqualTo((await response.Content.ReadAsByteArrayAsync()).Length));
+    }
+
+    [Test]
+    public async Task Max_age_counts_down_to_when_the_next_refresh_starts_and_a_304_carries_it_too()
+    {
+        var clock = new ManualClock(MondayMorning);
+        var fake = TestData.FakeHackerNews((1, TestData.Item("one", 30)), (2, TestData.Item("two", 20)));
+        // This refresh takes 30 seconds by the test's clock. The next one starts an hour after this one finished.
+        fake.Setup(c => c.GetBestStoryIdsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => { clock.Advance(TimeSpan.FromSeconds(30)); return (IReadOnlyList<int>)[1, 2]; });
+        await using var app = new BestStoriesApiFactory(fake, clock: clock);
+        using var http = app.CreateClient();
+
+        var first = await http.GetAsync("/api/beststories?n=2"); // waits for the first snapshot
+        clock.Advance(TimeSpan.FromMinutes(20) + TimeSpan.FromMilliseconds(500));
+        using var again = new HttpRequestMessage(HttpMethod.Get, "/api/beststories?n=2");
+        again.Headers.IfNoneMatch.Add(first.Headers.ETag!);
+        var revalidated = await http.SendAsync(again);
+        clock.Advance(TimeSpan.FromHours(2)); // the next refresh is late, or failed: the timer runs on real time
+        var overdue = await http.GetAsync("/api/beststories?n=2");
+
+        Assert.That(first.Headers.CacheControl?.MaxAge, Is.EqualTo(TimeSpan.FromHours(1)));
+        Assert.That(revalidated.StatusCode, Is.EqualTo(HttpStatusCode.NotModified));
+        Assert.That(revalidated.Headers.CacheControl?.MaxAge, Is.EqualTo(TimeSpan.FromSeconds(3600 - 1200 - 1))); // rounded down
+        Assert.That(overdue.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(overdue.Headers.CacheControl?.MaxAge, Is.EqualTo(TimeSpan.Zero));
     }
 
     [Test]

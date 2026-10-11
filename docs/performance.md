@@ -49,6 +49,54 @@ The figures summarised at the top of the [README](../README.md) are here in full
 - **The minimal endpoint, with source-generated JSON, still serialising per request** (first run, not interleaved): `n=10` maximum throughput went from about 20,800 to 36,400/s. The two changes were made together, so the gain is theirs jointly.
 - **Serialising once per refresh** took the rest, chiefly for large answers: `n=200` went from about 10,300 to 23,400/s in the same run.
 
+## Pre-compressed answers (11 October)
+
+Clients that send `Accept-Encoding: gzip` get the answer gzipped when the snapshot was built. It was measured before it was kept, against the build before it (8af6fc4, without max-age or gzip) and against gzipping per request with ASP.NET Core's response compression middleware.
+
+**How.**
+- **The machine and the load:** a shared 2-vCPU cloud VM (Xeon, .NET 10), the servers on one core, `wrk -t1 -c64 -d10s` and the stand-in Hacker News on the other. The server's core was 97% to 100% busy in every run.
+- **The rotation:** the three builds ran side by side, every configuration ran once a round, in rotation, for three rounds. Each figure is the median. `RefreshInterval` was 30 minutes, so no refresh fell inside a run.
+- **Real stories:** the 218 stories posted to Hacker News from 6 to 11 October 2026 with more than 100 points, from the Hacker News search API (hn.algolia.com), served by a small stand-in. The API ranked them and kept the top 200. Real titles and links are longer than the fake's and vary more, so they compress less.
+- **The fake's stories:** from `tools/FakeHackerNews`, as in the tables above.
+
+**Most requests per second** (closed loop):
+
+| answer | real stories | the fake's stories |
+|---|---:|---:|
+| `n=200`, the build before | 30,400 | 33,800 |
+| `n=200`, plain | 29,300 | 33,700 |
+| `n=200`, gzipped in advance | **44,100** | **55,600** |
+| `n=200`, gzipped per request (middleware) | 1,500 | 9,300 |
+| `n=10`, plain | 62,300 | 60,700 |
+| `n=10`, gzipped in advance | 62,600 | 61,200 |
+
+**Bytes in the answer:**
+
+| answer | real stories | the fake's stories |
+|---|---:|---:|
+| `n=200`, plain | 44,065 | 30,237 |
+| `n=200`, gzipped | 15,408 (2.9 times smaller) | 3,638 (8.3 times smaller) |
+| `n=10`, plain | 1,959 | 1,507 |
+| `n=10`, gzipped | 833 | 352 |
+
+**How to read it.**
+- **For a large answer the gain is real:** 51% more requests a second on real stories, 65% on the fake's. Most of the server's time on a large answer goes on copying bytes to the socket, and gzip sends a third as many, or an eighth on the fake's.
+- **For a small answer there is none:** the fixed cost of a request dominates.
+- **Plain answers are no slower:** the build before and this one differ by less than the spread of their own runs.
+- **Gzipping per request is the thing to avoid:** on real stories it was 19 times slower than sending the plain answer.
+- **Over a real network the bytes matter more than this loopback test shows.** On a 1 Gbit/s link, the plain `n=200` answer tops out at about 2,700 a second, and the gzipped one at about 7,500.
+
+**The cost.** Building a snapshot of the 200 real stories takes about 125 ms, the median of 15 builds, against a few hundred microseconds without gzip. The gzipped answers take 1.5 MB. Both grow with the square of the number of stories, since each answer is compressed whole. The raw outputs are in [`bench/results/2026-10-11-gzip/`](../bench/results/2026-10-11-gzip/).
+
+**Brotli was not added.** On the same real `n=200` answer, measured with the reference C libraries (through Python's bindings): gzip at the level the API uses gives 15,408 bytes; Brotli at quality 5, about as quick to build, 14,673 (5% smaller); Brotli at quality 11, 12,525 (19% smaller), but compressing all 200 answers took about 40 times as long as gzip.
+
+**To repeat it**, against the fake or the real Hacker News, send the same requests with and without the header:
+
+```bash
+wrk -t1 -c64 -d10s "http://localhost:5028/api/beststories?n=200"
+wrk -t1 -c64 -d10s -H "Accept-Encoding: gzip" "http://localhost:5028/api/beststories?n=200"
+```
+
 ## Reproduce the figures
 
 You need three terminals, and a fourth for a before/after:
