@@ -1,7 +1,7 @@
-// A stand-in for the Hacker News API, for load tests. It serves the three endpoints the API uses,
+// A stand-in for the Hacker News API, for load tests. It serves the two endpoints the API uses,
 // counts every call, and adds a delay to each one so a refresh takes about as long as it would
-// against the real thing. Scores move over time and changed items show up in updates.json, the way
-// they do on Hacker News, so an incremental refresh has something real to do.
+// against the real thing. Scores move over time, the way they do on Hacker News, so one refresh
+// can rank the stories differently from the last.
 //
 //   dotnet run -c Release --project tools/FakeHackerNews
 //
@@ -48,21 +48,12 @@ app.MapGet("/v0/beststories.json", async () =>
     return Results.Json(world.BestIds());
 });
 
-app.MapGet("/v0/item/{file}", async (string file) =>
+app.MapGet("/v0/item/{id:int}.json", async (int id) =>
 {
     world.Count("item");
     await Task.Delay(latency);
-    if (!file.EndsWith(".json", StringComparison.Ordinal) || !int.TryParse(file[..^5], out var id))
-        return Results.NotFound();
     var item = world.Item(id);
-    return item is null ? Results.Text("null", "application/json") : Results.Json(item);
-});
-
-app.MapGet("/v0/updates.json", async () =>
-{
-    world.Count("updates");
-    await Task.Delay(latency);
-    return Results.Json(new { items = world.RecentlyChanged(), profiles = Array.Empty<string>() });
+    return item is null ? Results.Text("null", "application/json") : Results.Json(item); // Hacker News answers null too
 });
 
 app.MapGet("/stats", () => Results.Json(world.Stats()));
@@ -75,14 +66,12 @@ app.Run();
 sealed class FakeWorld
 {
     private const int FirstId = 45_000_000;
-    private const int RecentWindow = 200; // updates.json lists about this many recently changed items
 
     private readonly Lock _gate = new();
     private readonly Dictionary<int, Dictionary<string, object?>> _items = new();
     private readonly List<int> _best = new();
-    private readonly LinkedList<int> _recent = new();
     private readonly Random _random = new(20261010);
-    private readonly Dictionary<string, long> _calls = new() { ["beststories"] = 0, ["item"] = 0, ["updates"] = 0 };
+    private readonly Dictionary<string, long> _calls = new() { ["beststories"] = 0, ["item"] = 0 };
     private DateTimeOffset _countingSince = DateTimeOffset.UtcNow;
 
     public FakeWorld(int storyCount)
@@ -93,18 +82,18 @@ sealed class FakeWorld
             var id = FirstId + i;
             _best.Add(id);
             var askHn = i % 17 == 5;
-            _items[id] = new Dictionary<string, object?>
+            var item = new Dictionary<string, object?>
             {
                 ["id"] = id,
                 ["type"] = "story",
                 ["by"] = $"user{i % 37}",
                 ["time"] = now - 600L * i,
                 ["title"] = askHn ? $"Ask HN: question number {i}" : $"Story number {i}",
-                ["url"] = askHn ? null : $"https://example.com/story/{i}",
                 ["score"] = _random.Next(50, 2500),
                 ["descendants"] = _random.Next(0, 900),
             };
-            if (askHn) _items[id].Remove("url");
+            if (!askHn) item["url"] = $"https://example.com/story/{i}"; // an Ask HN post has no url at all
+            _items[id] = item;
         }
     }
 
@@ -123,11 +112,6 @@ sealed class FakeWorld
         lock (_gate) return _items.TryGetValue(id, out var item) ? new Dictionary<string, object?>(item) : null;
     }
 
-    public List<int> RecentlyChanged()
-    {
-        lock (_gate) return [.. _recent];
-    }
-
     public void ChangeOneScore()
     {
         lock (_gate)
@@ -136,9 +120,6 @@ sealed class FakeWorld
             var item = _items[id];
             item["score"] = (int)item["score"]! + _random.Next(1, 25);
             item["descendants"] = (int)item["descendants"]! + _random.Next(0, 4);
-            _recent.Remove(id);
-            _recent.AddFirst(id);
-            while (_recent.Count > RecentWindow) _recent.RemoveLast();
         }
     }
 
@@ -154,7 +135,6 @@ sealed class FakeWorld
                 seconds = Math.Round(seconds, 1),
                 beststories = _calls["beststories"],
                 item = _calls["item"],
-                updates = _calls["updates"],
                 total,
                 perMinute = seconds > 0 ? Math.Round(total * 60 / seconds, 1) : 0,
             };

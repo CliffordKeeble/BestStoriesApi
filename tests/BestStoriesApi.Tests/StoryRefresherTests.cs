@@ -31,14 +31,14 @@ public class StoryRefresherTests
     [Test]
     public async Task Equal_scores_keep_the_order_Hacker_News_gave()
     {
-        var client = TestData.FakeHackerNews(
-            (1, TestData.Item("first", 10)),
-            (2, TestData.Item("second", 10)),
-            (3, TestData.Item("third", 10)));
+        // More than 16 of them: an unstable sort keeps the order of a short list anyway, so with three this test
+        // could not fail.
+        var titles = Enumerable.Range(1, 24).Select(i => $"story {i}").ToArray();
+        var client = TestData.FakeHackerNews(titles.Select((title, i) => (i + 1, TestData.Item(title, 10))).ToArray());
 
         var snapshot = await CreateRefresher(client).BuildSnapshotAsync(CancellationToken.None);
 
-        Assert.That(snapshot.Select(s => s.Title), Is.EqualTo(new[] { "first", "second", "third" }));
+        Assert.That(snapshot.Select(s => s.Title), Is.EqualTo(titles));
     }
 
     [Test]
@@ -57,19 +57,39 @@ public class StoryRefresherTests
     }
 
     [Test]
-    public async Task Deleted_and_missing_items_are_skipped()
+    public async Task Deleted_dead_and_empty_items_are_left_out()
     {
         var deleted = TestData.Item("deleted", 99);
         deleted.Deleted = true;
+        var dead = TestData.Item("dead", 98);
+        dead.Dead = true;
         var client = TestData.FakeHackerNews(
             (1, TestData.Item("kept", 10)),
             (2, deleted),
-            (3, TestData.Item("missing", 50)));
-        client.Setup(c => c.GetItemAsync(3, It.IsAny<CancellationToken>())).ReturnsAsync((HackerNewsItem?)null);
+            (3, dead),
+            (4, TestData.Item("empty", 50)));
+        client.Setup(c => c.GetItemAsync(4, It.IsAny<CancellationToken>())).ReturnsAsync((HackerNewsItem?)null);
 
         var snapshot = await CreateRefresher(client).BuildSnapshotAsync(CancellationToken.None);
 
         Assert.That(snapshot.Select(s => s.Title), Is.EqualTo(new[] { "kept" }));
+    }
+
+    [Test]
+    public async Task A_story_that_times_out_is_one_failure_and_the_refresh_goes_on()
+    {
+        // HttpClient reports its own timeout as a TaskCanceledException, which is an OperationCanceledException.
+        // Only the refresh itself being cancelled may stop the refresh.
+        var client = TestData.FakeHackerNews(
+            (1, TestData.Item("good one", 10)),
+            (2, TestData.Item("timed out", 99)),
+            (3, TestData.Item("good two", 20)));
+        client.Setup(c => c.GetItemAsync(2, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"));
+
+        var snapshot = await CreateRefresher(client).BuildSnapshotAsync(CancellationToken.None);
+
+        Assert.That(snapshot.Select(s => s.Title), Is.EqualTo(new[] { "good two", "good one" }));
     }
 
     [Test]
@@ -157,6 +177,29 @@ public class IncompleteRefreshTests
         Assert.ThrowsAsync<IncompleteRefreshException>(() => CreateRefresher(overLimit).BuildSnapshotAsync(CancellationToken.None));
     }
 
+    [TestCase("no body")]
+    [TestCase("no title")]
+    [TestCase("no author")]
+    public void An_answer_with_nothing_to_show_is_a_failure_so_190_of_them_make_the_refresh_incomplete(string emptiness)
+    {
+        // Hacker News can answer 200 with nothing usable. Counted as failures, 190 of 200 cannot pass for a complete
+        // refresh and replace a good snapshot with ten stories.
+        var client = TestData.FakeHackerNews(Enumerable.Range(1, 200).Select(id =>
+        {
+            var item = TestData.Item($"story {id}", id);
+            if (id > 10 && emptiness == "no title") item.Title = null;
+            if (id > 10 && emptiness == "no author") item.By = null;
+            return (id, item);
+        }).ToArray());
+        if (emptiness == "no body")
+            client.Setup(c => c.GetItemAsync(It.Is<int>(id => id > 10), It.IsAny<CancellationToken>())).ReturnsAsync((HackerNewsItem?)null);
+
+        var ex = Assert.ThrowsAsync<IncompleteRefreshException>(() => CreateRefresher(client).BuildSnapshotAsync(CancellationToken.None));
+
+        Assert.That(ex!.Failed, Is.EqualTo(190));
+        Assert.That(ex.Partial, Has.Count.EqualTo(10));
+    }
+
     [Test]
     public async Task Deleted_stories_are_not_failures()
     {
@@ -206,13 +249,12 @@ public class ShutdownTests
     }
 
     [Test]
-    public async Task Stopping_before_the_first_refresh_has_begun_releases_whoever_is_waiting_for_it()
+    public async Task Stopping_a_refresh_loop_that_never_started_releases_whoever_is_waiting_for_it()
     {
         var (service, store, _) = Build();
         var waiting = store.GetAsync(CancellationToken.None);
 
-        await service.StartAsync(new CancellationToken(canceled: true)).ContinueWith(_ => { });
-        await service.StopAsync(CancellationToken.None);
+        await service.StopAsync(CancellationToken.None); // never started, so only StopAsync can release them
 
         Assert.That(await waiting.WaitAsync(TimeSpan.FromSeconds(5)), Is.Null);
     }

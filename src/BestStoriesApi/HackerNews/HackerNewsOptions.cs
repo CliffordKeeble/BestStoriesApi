@@ -25,4 +25,11 @@ public class HackerNewsOptions
     /// slow first refresh would hold every early caller until the caller gave up.
     /// </summary>
     public TimeSpan FirstSnapshotWait { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Until there is a first snapshot, a failed refresh is tried again after this long, not after a whole
+    /// RefreshInterval, then after twice as long each time, up to RefreshInterval. A 503 sent before the first
+    /// snapshot carries it as Retry-After. Once there is a snapshot, refreshes follow RefreshInterval.
+    /// </summary>
+    public TimeSpan FirstSnapshotRetryInterval { get; set; } = TimeSpan.FromSeconds(5);
 }

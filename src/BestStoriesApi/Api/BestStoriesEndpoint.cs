@@ -22,7 +22,8 @@ public static class BestStoriesEndpoint
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
-    private static Task HandleAsync(HttpContext context, StoryStore store)
+    private static Task HandleAsync(
+        HttpContext context, StoryStore store, IOptions<HackerNewsOptions> options, ILoggerFactory loggers)
     {
         if (!TryReadN(context.Request.Query["n"], out var n))
         {
@@ -33,29 +34,38 @@ public static class BestStoriesEndpoint
 
         // The usual case: a snapshot is already there, so answer without waiting for anything.
         var snapshot = store.Current;
-        return snapshot is not null ? WriteAsync(context, snapshot, n) : WaitForFirstSnapshotAsync(context, store, n);
+        return snapshot is not null
+            ? WriteAsync(context, snapshot, n)
+            : WaitForFirstSnapshotAsync(context, store, options.Value, loggers, n);
     }
 
     /// <summary>
     /// Only before the first refresh has finished: wait for that one refresh, never start another, and not for
     /// longer than FirstSnapshotWait.
     /// </summary>
-    private static async Task WaitForFirstSnapshotAsync(HttpContext context, StoryStore store, int n)
+    private static async Task WaitForFirstSnapshotAsync(
+        HttpContext context, StoryStore store, HackerNewsOptions settings, ILoggerFactory loggers, int n)
     {
-        var limit = context.RequestServices.GetRequiredService<IOptions<HackerNewsOptions>>().Value.FirstSnapshotWait;
         StorySnapshot? snapshot;
+        var timedOut = false;
         try
         {
-            snapshot = await store.GetAsync(context.RequestAborted).WaitAsync(limit, context.RequestAborted);
+            snapshot = await store.GetAsync(context.RequestAborted).WaitAsync(settings.FirstSnapshotWait, context.RequestAborted);
         }
         catch (TimeoutException)
         {
             snapshot = null;
+            timedOut = true;
         }
 
         if (snapshot is null)
         {
-            context.Response.Headers.RetryAfter = "5";
+            loggers.CreateLogger(typeof(BestStoriesEndpoint)).LogNoSnapshotYet(timedOut);
+
+            // A failed first refresh is tried again after FirstSnapshotRetryInterval, and then less often, so that is the
+            // soonest it is worth coming back. Retry-After is in whole seconds, and at least one.
+            var retryAfter = Math.Max(1, (int)Math.Ceiling(settings.FirstSnapshotRetryInterval.TotalSeconds));
+            context.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
             await Results.Problem(
                 statusCode: StatusCodes.Status503ServiceUnavailable,
                 detail: "Stories are not available yet. Try again shortly.").ExecuteAsync(context);

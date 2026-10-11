@@ -115,6 +115,28 @@ public class BestStoriesEndpointTests
         Assert.That(response.Content.Headers.ContentType?.MediaType, Is.EqualTo("application/problem+json"));
     }
 
+    [Test]
+    public async Task A_failed_first_refresh_is_tried_again_soon_not_after_the_refresh_interval()
+    {
+        var calls = 0;
+        var fake = TestData.FakeHackerNews((1, TestData.Item("back", 5)));
+        fake.Setup(c => c.GetBestStoryIdsAsync(It.IsAny<CancellationToken>()))
+            .Returns(() => Interlocked.Increment(ref calls) == 1
+                ? Task.FromException<IReadOnlyList<int>>(new HttpRequestException("Hacker News is down at start-up"))
+                : Task.FromResult<IReadOnlyList<int>>(new[] { 1 }));
+
+        // An hour between refreshes, and 50 ms between tries until there is a first snapshot.
+        await using var app = new BestStoriesApiFactory(fake, configure: o => o.FirstSnapshotRetryInterval = TimeSpan.FromMilliseconds(50));
+        using var http = app.CreateClient();
+
+        var status = HttpStatusCode.ServiceUnavailable;
+        for (var deadline = DateTime.UtcNow + Patience; status != HttpStatusCode.OK && DateTime.UtcNow < deadline; await Task.Delay(20))
+            status = (await http.GetAsync("/api/beststories?n=1")).StatusCode;
+
+        Assert.That(status, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(calls, Is.EqualTo(2));
+    }
+
     [TestCase("/api/beststories")]
     [TestCase("/api/beststories?n=")]
     [TestCase("/api/beststories?n=0")]
@@ -184,14 +206,14 @@ public class IncompleteRefreshEndpointTests
     [Test]
     public async Task An_incomplete_refresh_does_not_replace_a_good_snapshot()
     {
-        var thirdCall = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fourthCall = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
         var failing = false;
         var fake = TestData.FakeHackerNews(Enumerable.Range(1, 20).Select(id => (id, TestData.Item($"story {id}", id))).ToArray());
         fake.Setup(c => c.GetBestStoryIdsAsync(It.IsAny<CancellationToken>()))
             .Returns(() =>
             {
-                if (Interlocked.Increment(ref calls) == 3) thirdCall.TrySetResult();
+                if (Interlocked.Increment(ref calls) == 4) fourthCall.TrySetResult();
                 return Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(1, 20).ToList());
             });
         fake.Setup(c => c.GetItemAsync(It.Is<int>(id => id > 1), It.IsAny<CancellationToken>()))
@@ -204,8 +226,7 @@ public class IncompleteRefreshEndpointTests
         using var http = app.CreateClient();
         await http.GetAsync("/api/beststories?n=1");
         Volatile.Write(ref failing, true);
-        await thirdCall.Task.WaitAsync(Patience);
-        await Task.Delay(100); // let that refresh finish
+        await fourthCall.Task.WaitAsync(Patience); // refreshes run one at a time, so the third, all failing, has finished
 
         using var document = JsonDocument.Parse(await http.GetStringAsync("/api/beststories?n=100"));
 
