@@ -147,10 +147,10 @@ Each change was measured as a step against the one before; see below. Two parts 
 
 **Bytes allocated per request** (`dotnet-counters`, at 5,000/s): 13,800 (`n=10`) and 14,300 (`n=200`) before; 3,800 and 3,900 after, against 3,200 for an empty 404 from the same server.
 
-**On a laptop** (Ryzen 5 PRO 7535U, 12 threads, Windows 11, on battery, measured by a second operator):
-- n=200, most requests per second: 21,100 before against 43,200–43,400 after.
-- The in-process benchmark agrees with the VM: 2.6 µs → 35 ns for `n=10`, and 44.7 µs → 0.68 µs for `n=200`.
-- Its fixed-rate latency rows were invalid. The load generator could not keep its schedule on Windows' 15.6 ms timer tick, which is fixed below, and they are to be rerun.
+**On a laptop** (Ryzen 5 PRO 7535U, 6 cores and 12 threads, Windows 11), measured by a second operator with this repository's load generator on the same machine as the server, on 11 October, on mains. The tables are in [`bench/results/2026-10-11-laptop.md`](bench/results/2026-10-11-laptop.md).
+- **Most requests per second** (closed loop, 64 connections): `n=10` 56,400 before, 84,400 and 89,600 after; `n=200` 22,500 before, 51,600 and 38,500 after. The two after runs are 25% apart, so at `n=200` the gain is 1.7 to 2.3 times, not one figure. On 10 October, on battery: 21,100 before, 43,200–43,400 after.
+- **Latency at a fixed rate:** the generator now spins on Windows' coarse timer, as designed, and 10 of the 18 rows kept their schedule. The other 8 did not, at no consistent rate, with Visual Studio and OneDrive running on the Balanced power plan; they are left out. The one rate valid in all three runs, `n=10` at 2,000/s, gave a p99 of 1.38 ms before and 0.46 and 0.41 ms after. Medians on the valid rows were 0.10 to 0.23 ms, in line with the spinning client on the VM (below).
+- **The in-process benchmark** agrees with the VM: 2.6 µs → 35 ns for `n=10`, and 44.7 µs → 0.68 µs for `n=200`.
 
 **How to read it.**
 - **Most of the ~1.1 ms median is the load generator, not the server.** An empty 404 from the same server measures 1.05–1.19 ms with wrk2.
