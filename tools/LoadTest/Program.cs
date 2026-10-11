@@ -183,7 +183,8 @@ static class Runner
                 var wait = start + (long)(i * period) - Stopwatch.GetTimestamp();
                 if (wait > 0) Pacing.WaitUpTo(wait);
             }
-        }) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "dispatcher" };
+        })
+        { IsBackground = true, Priority = ThreadPriority.Highest, Name = "dispatcher" };
 
         dispatcher.Start();
         dispatcher.Join();
@@ -265,7 +266,7 @@ static class Machine
     {
         var cpu = RuntimeInformation.ProcessArchitecture.ToString();
         if (File.Exists("/proc/cpuinfo"))
-            cpu = File.ReadLines("/proc/cpuinfo").FirstOrDefault(l => l.StartsWith("model name"))?.Split(':', 2)[1].Trim() ?? cpu;
+            cpu = File.ReadLines("/proc/cpuinfo").FirstOrDefault(l => l.StartsWith("model name", StringComparison.Ordinal))?.Split(':', 2)[1].Trim() ?? cpu;
         else if (Environment.GetEnvironmentVariable("PROCESSOR_IDENTIFIER") is { } id)
             cpu = id;
         return $"machine: {RuntimeInformation.OSDescription}; {Environment.ProcessorCount} logical CPUs; {cpu}; .NET {Environment.Version}; " +

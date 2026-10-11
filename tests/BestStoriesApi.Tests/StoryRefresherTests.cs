@@ -93,11 +93,11 @@ public class StoryRefresherTests
         var running = 0;
         var highestSeen = 0;
         client.Setup(c => c.GetItemAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .Returns(async (int id, CancellationToken _) =>
+            .Returns(async (int id, CancellationToken ct) =>
             {
                 var now = Interlocked.Increment(ref running);
                 InterlockedMax(ref highestSeen, now);
-                await Task.Delay(10);
+                await Task.Delay(10, ct);
                 Interlocked.Decrement(ref running);
                 return TestData.Item($"story {id}", id);
             });

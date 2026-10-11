@@ -20,8 +20,10 @@ public class StorySnapshotTests
     ];
 
     /// <summary>What the controller of 4ee5907 wrote: System.Text.Json with the web defaults, per request.</summary>
+    private static readonly JsonSerializerOptions WebDefaults = new(JsonSerializerDefaults.Web);
+
     private static string AsTheControllerWroteIt(IEnumerable<Story> stories) =>
-        JsonSerializer.Serialize(stories, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        JsonSerializer.Serialize(stories, WebDefaults);
 
     private static string Answer(StorySnapshot snapshot, int n) =>
         Encoding.UTF8.GetString(snapshot.Head(n).Span) + Encoding.UTF8.GetString(StorySnapshot.Tail.Span);

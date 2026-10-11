@@ -42,7 +42,7 @@ public class StoryRefreshService(
             var stories = await refresher.BuildSnapshotAsync(stoppingToken);
             var snapshot = StorySnapshot.Create(stories); // serialise once here, not once per request
             store.Publish(snapshot);
-            logger.LogInformation("Refreshed best stories: {Count} stories", snapshot.Count);
+            logger.LogRefreshed(snapshot.Count);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -53,20 +53,18 @@ public class StoryRefreshService(
         {
             // Nothing to fall back on yet: an incomplete list is better than none, and the next refresh replaces it.
             store.Publish(StorySnapshot.Create(ex.Partial));
-            logger.LogWarning(ex, "First refresh incomplete ({Failed} of {Requested} stories failed); serving the {Count} that loaded",
-                ex.Failed, ex.Requested, ex.Partial.Count);
+            logger.LogFirstRefreshIncomplete(ex, ex.Failed, ex.Requested, ex.Partial.Count);
         }
         catch (IncompleteRefreshException ex)
         {
             // A good snapshot is already being served. A ranking of the survivors would be worse, so keep it.
-            logger.LogWarning(ex, "Refresh incomplete ({Failed} of {Requested} stories failed); continuing to serve the previous snapshot",
-                ex.Failed, ex.Requested);
+            logger.LogRefreshIncomplete(ex, ex.Failed, ex.Requested);
             store.RefreshFailed();
         }
         catch (Exception ex)
         {
             // Keep serving the previous snapshot and try again on the next tick.
-            logger.LogError(ex, "Refresh failed; continuing to serve the previous snapshot");
+            logger.LogRefreshFailed(ex);
             store.RefreshFailed();
         }
     }

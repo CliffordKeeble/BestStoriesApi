@@ -36,7 +36,7 @@ public class StoryRefresher(
             {
                 // One bad story must not spoil the whole refresh. Leave it out, and count it.
                 Interlocked.Increment(ref failed);
-                logger.LogWarning(ex, "Skipping story {StoryId}: it could not be loaded", ids[index]);
+                logger.LogStorySkipped(ex, ids[index]);
             }
         });
 

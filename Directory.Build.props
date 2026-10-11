@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- The .NET 10 recommended code-analysis rules, pinned to 10.0 so that a newer SDK does not add rules
+         under the build. Warnings stay warnings here; the strict check is `dotnet build -c Release -warnaserror`. -->
+    <AnalysisLevel>10.0-recommended</AnalysisLevel>
+  </PropertyGroup>
+</Project>

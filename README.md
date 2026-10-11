@@ -60,6 +60,8 @@ dotnet test
 
 Each was seen to fail with the code it guards taken out, except the cold-start test, which came with the first version.
 
+The build is warning-free under the .NET 10 recommended code-analysis rules, which `Directory.Build.props` switches on: `dotnet build -c Release -warnaserror` checks it. The few rules switched off are in the project files, each with its reason.
+
 ### Configuration
 
 `src/BestStoriesApi/appsettings.json`, section `HackerNews`. Every value is checked at start-up, and a value that cannot work stops the app with a message that names it.
@@ -244,6 +246,7 @@ src/BestStoriesApi/
   Stories/StoryRefresher.cs         fetches, counts failures, ranks the whole list
   Stories/IncompleteRefreshException.cs   a refresh in which too many stories failed, carrying what did load
   Stories/StoryJsonContext.cs       the JSON shape, generated at compile time
+  Stories/StoriesLog.cs             the refresh's log messages, source-generated, each with an event id
   HackerNews/                       the upstream client, its options (checked at start-up), and its JSON shape
 tests/BestStoriesApi.Tests/         NUnit + Moq
 tools/FakeHackerNews/               a stand-in Hacker News for load tests: latency, moving scores, call counts

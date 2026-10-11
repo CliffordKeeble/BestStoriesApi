@@ -52,7 +52,7 @@ app.MapGet("/v0/item/{file}", async (string file) =>
 {
     world.Count("item");
     await Task.Delay(latency);
-    if (!file.EndsWith(".json") || !int.TryParse(file[..^5], out var id))
+    if (!file.EndsWith(".json", StringComparison.Ordinal) || !int.TryParse(file[..^5], out var id))
         return Results.NotFound();
     var item = world.Item(id);
     return item is null ? Results.Text("null", "application/json") : Results.Json(item);

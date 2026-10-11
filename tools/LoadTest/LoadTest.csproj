@@ -8,6 +8,9 @@
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredPGO>true</TieredPGO>
+    <!-- Its output is data, read by people and by scripts: 0.138, not 0,138, whatever the machine's locale,
+         and a warm-up of 0.5 means half a second everywhere. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
 </Project>
