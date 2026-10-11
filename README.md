@@ -203,7 +203,7 @@ dotnet run -c Release --project benchmarks/BestStoriesApi.Benchmarks -- --filter
 
 ## Assumptions
 
-1. **"Best n stories" means the best by score across the whole list.** Hacker News's best-stories list is its own ranking. The test asks for the stories "sorted by their score in a descending order", and the version of the brief dated 20 July 2023 says "the best n stories ... as determined by their score".
+1. **"Best n stories" means the best by score across the whole list.** Hacker News's best-stories list is its own ranking. The brief asks for "the best n stories from the Hacker News API, as determined by their score", returned "in descending order of score".
    - So the API ranks the whole list by score, highest first, and then takes `n`. It does not take the first `n` ids and sort those.
    - Equal scores keep the order Hacker News gave them.
 2. **`n` is required and must be a whole number of at least 1.** Anything else (missing, `0`, negative, not a whole number) returns `400 Bad Request`, as `application/problem+json`.
