@@ -48,10 +48,25 @@ The console shows the settings in force at start, then for each refresh what was
 
 ```
 info: BestStoriesApi.Stories.StoryRefresher[8]
-      Fetched 200 of 200 best stories in 899 ms: 0 deleted or dead, 0 failed
+      Fetched 200 of 200 best stories in 1450 ms: 0 deleted or dead, 0 failed (0 kept their last good version)
 info: BestStoriesApi.Stories.StoryRefreshService[1]
       Refreshed best stories: 200 stories
 ```
+
+### Health
+
+| Endpoint | Answer |
+|---|---|
+| `GET /health/live` | 200 while the process answers. |
+| `GET /health/ready` | 503 until there is a first snapshot. Then 200: `Healthy` while the snapshot is fresh, or `Degraded` once it is older than three refresh intervals, which means refreshes are failing or very slow. The old list is still served. |
+
+Readiness says how many stories are being served and how old they are. Against the fake Hacker News, four seconds after the first refresh:
+
+```json
+{"status":"Healthy","description":"Serving the latest snapshot","stories":200,"builtAt":"2026-10-11T19:26:33.008243+00:00","ageSeconds":4}
+```
+
+Neither endpoint calls Hacker News, and both answer with `Cache-Control: no-store, no-cache`.
 
 ### Run the tests
 
@@ -59,15 +74,17 @@ info: BestStoriesApi.Stories.StoryRefreshService[1]
 dotnet test
 ```
 
-57 tests, NUnit and Moq. None needs a network, and together they take a few seconds. Most replace the Hacker News client with a Moq fake; one keeps the real client and its whole HTTP pipeline, and replaces only the network beneath it. Among them:
+65 tests, NUnit and Moq. None needs a network, and together they take a few seconds. Most replace the Hacker News client with a Moq fake; one keeps the real client and its whole HTTP pipeline, and replaces only the network beneath it. Among them:
 - the real client asks for exactly the two addresses the brief names, and turns the brief's example story into the brief's example answer;
 - the pre-built answer for every `n` is byte for byte what serialising per request produced, for awkward input: no link, non-ASCII, quotes, HTML characters;
 - fifty requests at cold start cause exactly one refresh;
 - a refresh in which most stories fail does not replace a good snapshot, and a story that times out or comes back empty counts as failed;
+- a story that fails keeps its last good version for up to two refreshes, and still counts as failed;
 - a failed first refresh is tried again within seconds, then less and less often while Hacker News keeps failing;
 - a client that sends its ETag back gets 304, and HEAD gets the GET headers with no body;
 - stopping the app releases anyone still waiting for the first snapshot, even when the refresh loop never started;
-- a setting that cannot work stops the app at start, naming the setting.
+- a setting that cannot work stops the app at start, naming the setting;
+- readiness is 503 until there is a snapshot, then gives the number of stories and their age, and turns `Degraded` after three refresh intervals.
 
 Each was seen to fail with the code it guards taken out, except the cold-start test, which came with the first version.
 
@@ -90,7 +107,7 @@ Any of these can be set from the environment, for example `HackerNews__BaseAddre
 
 ### Logging
 
-- **Information,** the default: the settings at start, then the two lines per refresh shown above. A story skipped, a refresh that is incomplete or fails, and a retry or timeout on a call to Hacker News are Warnings or Errors. Each of the app's own messages has an event id.
+- **Information,** the default: the settings at start, then the two lines per refresh shown above. A story that could not be loaded, a refresh that is incomplete or fails, and a retry or timeout on a call to Hacker News are Warnings or Errors. Each of the app's own messages has an event id.
 - **Debug, for the app only:** `--Logging:LogLevel:BestStoriesApi=Debug` adds when each refresh starts, each story left out as deleted or dead, and each 503 sent before the first snapshot. The `http` launch profile runs in Development, which has it on.
 - **The framework's lines for every call are off.** `HttpClient` writes four Information lines for every call to Hacker News and the resilience handler (Polly) one more: about 1,000 lines a refresh, which buried the app's two. `appsettings.json` sets both to Warning, so retries, timeouts and the circuit breaker opening still show. `--Logging:LogLevel:Polly=Information` brings the line per call back.
 - **The messages are source-generated** (`[LoggerMessage]`). A message whose level is off is never formatted, so the Debug messages can stay in a Release build at almost no cost.
@@ -113,6 +130,7 @@ The rule that does the work: **a caller's request never causes a call to Hacker 
   - Each call is bounded. A refresh as a whole is not: with a slow upstream, 20 rounds of 10 calls can take minutes. The previous snapshot is served throughout.
 - **A failed or incomplete refresh keeps the old data.** Failures are not independent: when Hacker News wobbles, many fetches fail together, and the circuit breaker can open in the middle of a refresh. A ranking of whatever survived could then leave out the real top stories.
   - **Complete:** a refresh in which more than `MaxFailedFetchFraction` (10%) of story fetches failed counts as incomplete, with one failure always allowed. A story that times out, or comes back with no body, title or author, is a failure. A story that is deleted or dead is not.
+  - **A failed story keeps its last good version for up to two refreshes,** so one failed fetch does not take a top story out of the answers for a minute, and nothing served was fetched more than about three refresh intervals ago. It still counts as a failure: a refresh made mostly of kept versions is not a fresh one, so it is incomplete, and one in which no story loaded at all has failed.
   - **Old data kept:** an incomplete or failed refresh never replaces a good snapshot. It is logged, and the previous snapshot keeps being served.
   - **Before the first snapshot:** an incomplete list is served, because it beats nothing, and the next refresh replaces it.
   - A placeholder is never stored.
@@ -155,13 +173,13 @@ The figures at the top of this page are from [`docs/performance.md`](docs/perfor
 6. **`commentCount` is Hacker News's `descendants`** (all comments, including replies). It is `0` if Hacker News gives none.
 7. **Deleted and dead items are left out**, as is any story whose title or author is missing. A missing title or author counts as a failed fetch; a deleted or dead story does not.
 8. **Data is normally at most one refresh old** (a minute, plus however long the refresh took).
-   - While refreshes keep failing, the last good snapshot is served for as long as they fail, with an unchanged ETag. Nothing in the response says how old it is; a health check that reports the snapshot's age is the first item under next steps.
+   - While refreshes keep failing, the last good snapshot is served for as long as they fail, with an unchanged ETag. Nothing in a story answer says how old it is, but `/health/ready` reports the snapshot's age, and turns `Degraded` after three refresh intervals. A story kept from an earlier refresh can be up to two refreshes older than its snapshot.
 9. **If the very first refresh fails**, or has not finished within `FirstSnapshotWait`, requests get `503 Service Unavailable` until a refresh succeeds. `Retry-After` is `FirstSnapshotRetryInterval` (5 s), the soonest a failed first refresh is tried again.
 10. **One instance.** The snapshot lives in the memory of the running process.
 
 ## What I would do next, given time
 
-- **Say how old the data is:** a readiness check that is healthy only when a snapshot exists, a health endpoint that reports the snapshot's age, and a `Last-Modified` header on every answer.
+- **Say how old the data is in every answer,** with a `Last-Modified` header. Readiness and the snapshot's age are already at `/health/ready`.
 - **Several instances.** Each instance currently builds its own snapshot, which multiplies the upstream calls by the number of instances. A shared cache (Redis, say) with one elected refresher would keep it to one set of calls. With several instances, the ETag already lets a CDN or reverse proxy in front absorb most of the traffic.
 - **An incremental refresh,** fetching only the stories Hacker News lists as changed in `/v0/updates.json`, plus any new ids, would cut the 200 story calls a minute to however many changed. **I left it out on purpose.**
   - It is only correct if `updates.json` covers at least one refresh interval, and that cannot be measured without the live API. If the window is shorter, scores go stale with nothing to show it.
@@ -184,10 +202,12 @@ src/BestStoriesApi/
   Api/BestStoriesEndpoint.cs        the endpoint: validate n, take the current snapshot, write its bytes, 304, or HEAD
   Api/BestStoriesOpenApi.cs         describes n to Swagger (Development only)
   Api/ApiLog.cs                     the endpoint's one log message: a 503 sent before the first snapshot (Debug)
-  Stories/StorySnapshot.cs          the ranked stories serialised once, with each story's end offset and each answer's ETag
+  Api/SnapshotReadinessCheck.cs     readiness: is there a snapshot, how many stories, how old; Degraded after three refresh intervals
+  Api/HealthResponseWriter.cs       writes a health report as one small JSON object
+  Stories/StorySnapshot.cs          the ranked stories serialised once, with each story's end offset, each answer's ETag, and when it was built
   Stories/StoryStore.cs             holds the current snapshot; one writer swaps it, readers never wait
   Stories/StoryRefreshService.cs    background loop: refresh now, retry soon until there is a snapshot, then every interval; keeps the old snapshot on a bad refresh
-  Stories/StoryRefresher.cs         fetches, counts failures, ranks the whole list
+  Stories/StoryRefresher.cs         fetches, counts failures, keeps a failed story's last good version for two refreshes, ranks the whole list
   Stories/IncompleteRefreshException.cs   a refresh in which too many stories failed, carrying what did load
   Stories/StoryJsonContext.cs       the JSON shape, generated at compile time
   Stories/StoriesLog.cs             the refresh's log messages, source-generated, each with an event id

@@ -220,6 +220,10 @@ public class IncompleteRefreshEndpointTests
             .Returns((int id, CancellationToken _) => Volatile.Read(ref failing)
                 ? Task.FromException<HackerNewsItem?>(new HttpRequestException("down"))
                 : Task.FromResult<HackerNewsItem?>(TestData.Item($"story {id}", id)));
+        // Story 1 goes on loading, with a new score once the others fail. A failing refresh would rank it first, so
+        // it shows whether that refresh was published: its other 19 stories are kept versions, the same as before.
+        fake.Setup(c => c.GetItemAsync(1, It.IsAny<CancellationToken>()))
+            .Returns(() => Task.FromResult<HackerNewsItem?>(TestData.Item("story 1", Volatile.Read(ref failing) ? 500 : 1)));
 
         // Refresh every 20 ms. The first refresh loads all 20; after that 19 of 20 fail on every refresh.
         await using var app = new BestStoriesApiFactory(fake, TimeSpan.FromMilliseconds(20));
@@ -229,8 +233,11 @@ public class IncompleteRefreshEndpointTests
         await fourthCall.Task.WaitAsync(Patience); // refreshes run one at a time, so the third, all failing, has finished
 
         using var document = JsonDocument.Parse(await http.GetStringAsync("/api/beststories?n=100"));
+        var served = document.RootElement.EnumerateArray().ToList();
 
-        Assert.That(document.RootElement.GetArrayLength(), Is.EqualTo(20));
+        Assert.That(served, Has.Count.EqualTo(20));
+        Assert.That(served[0].GetProperty("title").GetString(), Is.EqualTo("story 20"));
+        Assert.That(served.Single(s => s.GetProperty("title").GetString() == "story 1").GetProperty("score").GetInt32(), Is.EqualTo(1));
     }
 
     [Test]

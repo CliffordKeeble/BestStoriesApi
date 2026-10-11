@@ -1,6 +1,7 @@
 using BestStoriesApi.Api;
 using BestStoriesApi.HackerNews;
 using BestStoriesApi.Stories;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -21,6 +22,10 @@ builder.Services.AddSingleton<IHackerNewsClient, HackerNewsClient>();
 builder.Services.AddSingleton<StoryRefresher>();
 builder.Services.AddSingleton<StoryStore>();
 builder.Services.AddHostedService<StoryRefreshService>();
+builder.Services.AddSingleton(TimeProvider.System);
+
+// Readiness says whether there is a snapshot to serve and how old it is. Neither health endpoint calls Hacker News.
+builder.Services.AddHealthChecks().AddCheck<SnapshotReadinessCheck>("snapshot", tags: ["ready"]);
 
 builder.Services.AddProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
@@ -35,6 +40,16 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapBestStories();
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false, // the process answers, which is all liveness asks
+    ResponseWriter = HealthResponseWriter.WriteAsync,
+});
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = HealthResponseWriter.WriteAsync,
+});
 
 app.Run();
 

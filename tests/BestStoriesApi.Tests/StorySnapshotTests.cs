@@ -31,7 +31,7 @@ public class StorySnapshotTests
     [Test]
     public void Every_answer_is_byte_for_byte_what_serialising_per_request_produced()
     {
-        var snapshot = StorySnapshot.Create(Awkward);
+        var snapshot = StorySnapshot.Create(Awkward, Example);
 
         for (var n = 1; n <= Awkward.Length + 3; n++)
         {
@@ -44,7 +44,7 @@ public class StorySnapshotTests
     [Test]
     public void The_answer_for_n_is_valid_JSON_holding_n_stories_and_more_than_there_are_gives_all()
     {
-        var snapshot = StorySnapshot.Create(Awkward);
+        var snapshot = StorySnapshot.Create(Awkward, Example);
 
         Assert.That(JsonDocument.Parse(Answer(snapshot, 1)).RootElement.GetArrayLength(), Is.EqualTo(1));
         Assert.That(JsonDocument.Parse(Answer(snapshot, 3)).RootElement.GetArrayLength(), Is.EqualTo(3));
@@ -54,8 +54,8 @@ public class StorySnapshotTests
     [Test]
     public void The_tag_depends_only_on_the_content_so_an_unchanged_answer_keeps_its_tag_across_refreshes()
     {
-        var first = StorySnapshot.Create(Awkward);
-        var second = StorySnapshot.Create(Awkward.Select(s => s with { }).ToArray());
+        var first = StorySnapshot.Create(Awkward, Example);
+        var second = StorySnapshot.Create(Awkward.Select(s => s with { }).ToArray(), Example);
 
         for (var n = 1; n <= Awkward.Length; n++)
             Assert.That(second.ETag(n), Is.EqualTo(first.ETag(n)), $"n = {n}");
@@ -64,10 +64,10 @@ public class StorySnapshotTests
     [Test]
     public void A_change_to_story_k_changes_the_tag_for_every_n_that_includes_it_and_no_other()
     {
-        var before = StorySnapshot.Create(Awkward);
+        var before = StorySnapshot.Create(Awkward, Example);
         var changed = Awkward.ToArray();
         changed[2] = changed[2] with { CommentCount = changed[2].CommentCount + 1 };
-        var after = StorySnapshot.Create(changed);
+        var after = StorySnapshot.Create(changed, Example);
 
         Assert.That(after.ETag(1), Is.EqualTo(before.ETag(1)));
         Assert.That(after.ETag(2), Is.EqualTo(before.ETag(2)));
@@ -78,7 +78,7 @@ public class StorySnapshotTests
     [Test]
     public void Tags_differ_between_n_and_are_quoted_as_HTTP_requires()
     {
-        var snapshot = StorySnapshot.Create(Awkward);
+        var snapshot = StorySnapshot.Create(Awkward, Example);
         var tags = Enumerable.Range(1, Awkward.Length).Select(snapshot.ETag).ToList();
 
         Assert.That(tags, Is.Unique);

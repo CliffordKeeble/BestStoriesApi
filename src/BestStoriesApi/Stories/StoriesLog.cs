@@ -20,8 +20,8 @@ internal static partial class StoriesLog
     [LoggerMessage(EventId = 4, Level = LogLevel.Error, Message = "Refresh failed; continuing to serve the previous snapshot")]
     public static partial void LogRefreshFailed(this ILogger logger, Exception exception);
 
-    [LoggerMessage(EventId = 5, Level = LogLevel.Warning, Message = "Skipping story {StoryId}: it could not be loaded")]
-    public static partial void LogStorySkipped(this ILogger logger, Exception exception, int storyId);
+    [LoggerMessage(EventId = 5, Level = LogLevel.Warning, Message = "Story {StoryId} could not be loaded")]
+    public static partial void LogStoryFailed(this ILogger logger, Exception exception, int storyId);
 
     [LoggerMessage(EventId = 6, Level = LogLevel.Information,
         Message = "Refreshing from {BaseAddress} every {RefreshInterval}, {MaxParallelFetches} fetches at a time; a refresh is " +
@@ -35,14 +35,16 @@ internal static partial class StoriesLog
     public static partial void LogRefreshStarted(this ILogger logger);
 
     [LoggerMessage(EventId = 8, Level = LogLevel.Information,
-        Message = "Fetched {Loaded} of {Requested} best stories in {ElapsedMilliseconds} ms: {Gone} deleted or dead, {Failed} failed")]
-    public static partial void LogFetched(this ILogger logger, int loaded, int requested, int gone, int failed, long elapsedMilliseconds);
+        Message = "Fetched {Fetched} of {Requested} best stories in {ElapsedMilliseconds} ms: {Gone} deleted or dead, " +
+                  "{Failed} failed ({Kept} kept their last good version)")]
+    public static partial void LogFetched(
+        this ILogger logger, int fetched, int requested, int gone, int failed, int kept, long elapsedMilliseconds);
 
     [LoggerMessage(EventId = 9, Level = LogLevel.Debug, Message = "Story {StoryId} is deleted or dead on Hacker News, so it is left out")]
     public static partial void LogStoryGone(this ILogger logger, int storyId);
 
     [LoggerMessage(EventId = 10, Level = LogLevel.Warning,
-        Message = "Skipping story {StoryId}: Hacker News answered with nothing to show (no body, or no title or author)")]
+        Message = "Story {StoryId}: Hacker News answered with nothing to show (no body, or no title or author)")]
     public static partial void LogStoryUnusable(this ILogger logger, int storyId);
 
     [LoggerMessage(EventId = 11, Level = LogLevel.Error,

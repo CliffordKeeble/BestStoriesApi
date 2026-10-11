@@ -31,7 +31,7 @@ public class FirstSnapshotRetryTests
         var store = new StoryStore();
         var service = new StoryRefreshService(
             new StoryRefresher(client.Object, options, NullLogger<StoryRefresher>.Instance),
-            store, options, NullLogger<StoryRefreshService>.Instance);
+            store, options, TimeProvider.System, NullLogger<StoryRefreshService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
         await fourthTry.Task.WaitAsync(TimeSpan.FromSeconds(10));

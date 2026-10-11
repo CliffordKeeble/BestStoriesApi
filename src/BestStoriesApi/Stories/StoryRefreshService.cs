@@ -11,6 +11,7 @@ public class StoryRefreshService(
     StoryRefresher refresher,
     StoryStore store,
     IOptions<HackerNewsOptions> options,
+    TimeProvider clock,
     ILogger<StoryRefreshService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -57,7 +58,7 @@ public class StoryRefreshService(
         try
         {
             var stories = await refresher.BuildSnapshotAsync(stoppingToken);
-            var snapshot = StorySnapshot.Create(stories); // serialise once here, not once per request
+            var snapshot = StorySnapshot.Create(stories, clock.GetUtcNow()); // serialise once here, not once per request
             store.Publish(snapshot);
             logger.LogRefreshed(snapshot.Count);
         }
@@ -69,7 +70,7 @@ public class StoryRefreshService(
         catch (IncompleteRefreshException ex) when (store.Current is null)
         {
             // Nothing to fall back on yet: an incomplete list is better than none, and the next refresh replaces it.
-            store.Publish(StorySnapshot.Create(ex.Partial));
+            store.Publish(StorySnapshot.Create(ex.Partial, clock.GetUtcNow()));
             logger.LogFirstRefreshIncomplete(ex, ex.Failed, ex.Requested, ex.Partial.Count);
         }
         catch (IncompleteRefreshException ex)

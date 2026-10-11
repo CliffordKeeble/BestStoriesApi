@@ -21,9 +21,10 @@ public sealed class StorySnapshot
     private readonly int[] _endOf;      // _endOf[i] = index in _json just past story i
     private readonly string[] _etags;   // _etags[i] = the entity tag of the answer holding stories 0..i
 
-    private StorySnapshot(IReadOnlyList<Story> stories, byte[] json, int[] endOf, string[] etags)
+    private StorySnapshot(IReadOnlyList<Story> stories, DateTimeOffset builtAt, byte[] json, int[] endOf, string[] etags)
     {
         Stories = stories;
+        BuiltAt = builtAt;
         _json = json;
         _endOf = endOf;
         _etags = etags;
@@ -33,8 +34,14 @@ public sealed class StorySnapshot
 
     public int Count => Stories.Count;
 
+    /// <summary>
+    /// When the refresh that built this snapshot finished. The readiness check reports the snapshot's age from it.
+    /// A story kept from an earlier refresh is at most <see cref="StoryRefresher.MaxRefreshesKept"/> refreshes older.
+    /// </summary>
+    public DateTimeOffset BuiltAt { get; }
+
     /// <summary>Serialises the ranked stories once, recording where each one ends and a hash of every prefix.</summary>
-    public static StorySnapshot Create(IReadOnlyList<Story> stories)
+    public static StorySnapshot Create(IReadOnlyList<Story> stories, DateTimeOffset builtAt)
     {
         using var buffer = new MemoryStream(stories.Count * 200 + 2);
         var endOf = new int[stories.Count];
@@ -61,7 +68,7 @@ public sealed class StorySnapshot
             }
         }
         buffer.WriteByte((byte)']');
-        return new StorySnapshot(stories, buffer.ToArray(), endOf, etags);
+        return new StorySnapshot(stories, builtAt, buffer.ToArray(), endOf, etags);
     }
 
     /// <summary>How many stories the answer for n holds: n, or all of them if there are fewer.</summary>

@@ -8,11 +8,14 @@ using Moq;
 namespace BestStoriesApi.Tests;
 
 /// <summary>
-/// Starts the real app in memory, with the Hacker News client swapped for a Moq fake.
-/// The refresh service, store, endpoint and JSON output are all the real ones.
+/// Starts the real app in memory, with the Hacker News client swapped for a Moq fake, and the clock too when a test
+/// gives one. The refresh service, store, endpoint and JSON output are all the real ones.
 /// </summary>
 public class BestStoriesApiFactory(
-    Mock<IHackerNewsClient> fakeHackerNews, TimeSpan? refreshInterval = null, Action<HackerNewsOptions>? configure = null)
+    Mock<IHackerNewsClient> fakeHackerNews,
+    TimeSpan? refreshInterval = null,
+    Action<HackerNewsOptions>? configure = null,
+    TimeProvider? clock = null)
     : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -25,6 +28,7 @@ public class BestStoriesApiFactory(
             // A long default, so a test sees exactly one refresh unless it asks for more.
             services.Configure<HackerNewsOptions>(o => o.RefreshInterval = refreshInterval ?? TimeSpan.FromHours(1));
             if (configure is not null) services.Configure(configure);
+            if (clock is not null) services.AddSingleton(clock);
         });
     }
 }

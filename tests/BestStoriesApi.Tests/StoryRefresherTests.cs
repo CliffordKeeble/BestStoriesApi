@@ -42,7 +42,7 @@ public class StoryRefresherTests
     }
 
     [Test]
-    public async Task A_story_that_fails_to_load_is_skipped_and_the_rest_are_kept()
+    public async Task A_story_that_fails_with_no_earlier_version_is_left_out_and_the_rest_are_kept()
     {
         var client = TestData.FakeHackerNews(
             (1, TestData.Item("good one", 10)),
@@ -231,7 +231,7 @@ public class ShutdownTests
         var store = new StoryStore();
         var service = new StoryRefreshService(
             new StoryRefresher(client.Object, options, NullLogger<StoryRefresher>.Instance),
-            store, options, NullLogger<StoryRefreshService>.Instance);
+            store, options, TimeProvider.System, NullLogger<StoryRefreshService>.Instance);
         return (service, store, entered.Task);
     }
 
