@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# The latency and throughput tables in the README, re-run on your machine (Linux or WSL).
+# The latency and throughput tables in docs/performance.md, re-run on your machine (Linux or WSL).
 #
 # Needs wrk2 (https://github.com/giltene/wrk2, built as "wrk"; give its path in WRK2) and wrk (apt install wrk).
-# Start the fake Hacker News and the API (and, for a before/after comparison, the old build on another port):
+# Start the fake Hacker News and the API (and, for a before/after comparison, the first version on port 5029, as
+# docs/performance.md shows):
 #
 #   taskset -c 0 dotnet run -c Release --project tools/FakeHackerNews &
 #   ASPNETCORE_URLS=http://localhost:5028 HackerNews__BaseAddress=http://localhost:5099/v0/ \

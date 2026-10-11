@@ -4,7 +4,7 @@
 // one from the moment it was DUE, not from the moment it was sent. A server that stalls therefore pays for
 // every request that queued behind the stall. A tool that waits for a reply before sending the next request
 // (a closed loop) quietly sends fewer requests while the server is slow and under-reports the tail; this is
-// "coordinated omission" (Gil Tene). Open loop is how the latency percentiles in the README are measured.
+// "coordinated omission" (Gil Tene). Open loop is how the latency percentiles in docs/performance.md are measured.
 //
 // CLOSED LOOP (--mode closed) keeps C requests in flight as fast as the server answers. It measures the most
 // requests per second the server can take, not latency under a stated load.
