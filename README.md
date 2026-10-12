@@ -231,3 +231,7 @@ docs/performance.md                 the measurements in full, how to read them, 
 ## AI assistance
 
 This solution was written with the help of an AI assistant (Claude, by Anthropic) and reviewed by me, Clifford Keeble.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
